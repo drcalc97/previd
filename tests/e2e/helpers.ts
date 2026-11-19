@@ -13,6 +13,11 @@ export const admin = () => postgres(envFile.DATABASE_ADMIN_URL, { max: 1, onnoti
 
 /** Sign in with password + TOTP (reads the pending/enrolled secret from the test DB; test-only). */
 export async function login(page: Page, email: string, password = DEMO_PASSWORD) {
+  { // the suite signs in far more often than a human would; clear throttling counters (the limiter itself is tested in auth.spec)
+    const s = admin();
+    await s`delete from rate_limits`;
+    await s.end();
+  }
   await page.goto("/login");
   await page.getByLabel("Email address").fill(email);
   await page.getByLabel("Password").fill(password);
@@ -36,7 +41,7 @@ export async function ids() {
   const sql = admin();
   try {
     const orgs = await sql`select id, slug from organisations`;
-    const pats = await sql`select p.id, p.org_id, o.slug, p.family_name, p.given_name from patients p join organisations o on o.id = p.org_id order by p.synthetic_ref`;
+    const pats = await sql`select p.id, p.org_id, o.slug, p.family_name, p.given_name from patients p join organisations o on o.id = p.org_id where p.archived_at is null and p.synthetic_ref like 'SYN-%' order by p.synthetic_ref`;
     return { orgs, pats };
   } finally {
     await sql.end();
@@ -52,3 +57,18 @@ export function fakeWebm(size = 4096): Buffer {
 
 /** App alerts (excludes Next.js's hidden route announcer, which also has role=alert). */
 export const alerts = (page: Page) => page.locator('[role="alert"]:not(#__next-route-announcer__)');
+
+/** Create an 'available' recording through the real API flow (init -> signed upload -> complete). Returns its id. */
+export async function createRecordingViaApi(page: Page, org: string, patientId: string): Promise<string> {
+  const video = readFileSync("tests/fixtures/sample.webm"); // a real, playable 2 s WebM
+  const json = { "Content-Type": "application/json", Origin: "http://localhost:3100" };
+  const init = await page.request.post(`/api/o/${org}/recordings`, {
+    data: { patientId, idempotencyKey: `seed-${Date.now()}-${Math.random().toString(36).slice(2)}-xxxx`, identityChecks: ["name", "dob"], mimeType: "video/webm", sizeBytes: video.length, durationSec: 2 },
+    headers: json,
+  });
+  expect(init.status()).toBe(200);
+  const { recordingId, target } = await init.json();
+  expect((await page.request.put(target.url, { data: video, headers: target.headers })).status()).toBe(200);
+  expect((await page.request.post(`/api/o/${org}/recordings/${recordingId}/complete`, { data: {}, headers: json })).status()).toBe(200);
+  return recordingId;
+}

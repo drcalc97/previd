@@ -13,8 +13,10 @@ export function Player({ slug, recordingId, label, autoLoad = false }: { slug: s
   const [loading, setLoading] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const resume = useRef<{ t: number; play: boolean } | null>(null);
+  const lastLoad = useRef(0);
 
   const fetchUrl = useCallback(async (): Promise<string> => {
+    lastLoad.current = Date.now();
     const res = await fetch(`/api/o/${slug}/recordings/${recordingId}/playback`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(body.error ?? "Could not load the video.");
@@ -40,6 +42,12 @@ export function Player({ slug, recordingId, label, autoLoad = false }: { slug: s
 
   // If the signed URL expired mid-viewing, fetch a new one and resume at the same position.
   const onError = () => {
+    // A fresh URL that fails straight away means the file itself is the problem: do not loop.
+    if (Date.now() - lastLoad.current < 15_000) {
+      setUrl(null);
+      setErr("This video could not be played in your browser. Try another browser, or contact your administrator.");
+      return;
+    }
     const v = videoRef.current;
     if (v) resume.current = { t: v.currentTime, play: !v.paused };
     void load();

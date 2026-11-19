@@ -82,7 +82,7 @@ export function PageHeader({ title, subtitle, actions }: { title: string; subtit
 
 export function Table({ children, caption }: { children: ReactNode; caption: string }) {
   return (
-    <div className="overflow-x-auto rounded-xl border border-border bg-surface">
+    <div role="region" aria-label={caption} tabIndex={0} className="overflow-x-auto rounded-xl border border-border bg-surface">
       <table className="w-full min-w-[32rem] border-collapse text-left text-sm">
         <caption className="sr-only">{caption}</caption>
         {children}

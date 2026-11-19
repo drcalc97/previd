@@ -1,0 +1,64 @@
+name: CI
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      # Throw-away CI values only. No real secrets are used or required.
+      APP_URL: http://localhost:3100
+      DATABASE_URL: postgres://previd_app:ci_app_password_123@localhost:5432/previd_test
+      DATABASE_ADMIN_URL: postgres://postgres:postgres@localhost:5432/previd_test
+      DATABASE_APP_PASSWORD: ci_app_password_123
+      AUTH_PROVIDER: local
+      STORAGE_PROVIDER: local
+      PREVID_ALLOW_DEV_ADAPTERS: "false"
+      SIGNING_SECRET: ci-signing-secret-not-for-production-0000
+      AUTH_ENC_KEY: Y2ktZW5jLWtleS0zMi1ieXRlcy1sb25nLTEyMzQ1Njc=
+      CRON_SECRET: test-cron-secret-0000000000
+      LOCAL_STORAGE_DIR: .data/test-videos
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npx eslint .
+      - name: Create test database
+        run: |
+          PGPASSWORD=postgres psql -h localhost -U postgres -c "create database previd_test"
+          npx tsx scripts/db.ts migrate
+          npx tsx scripts/db.ts setup-app
+      - run: npm test
+      - name: Dependency audit (production deps, high+)
+        run: npm audit --omit=dev --audit-level=high
+      - run: npm run build
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+      - name: End-to-end tests
+        run: |
+          printf '%s\n' "APP_URL=$APP_URL" "DATABASE_URL=$DATABASE_URL" "DATABASE_ADMIN_URL=$DATABASE_ADMIN_URL" \
+            "DATABASE_APP_PASSWORD=$DATABASE_APP_PASSWORD" "AUTH_PROVIDER=local" "STORAGE_PROVIDER=local" \
+            "PREVID_ALLOW_DEV_ADAPTERS=false" "SIGNING_SECRET=$SIGNING_SECRET" "AUTH_ENC_KEY=$AUTH_ENC_KEY" \
+            "CRON_SECRET=$CRON_SECRET" "LOCAL_STORAGE_DIR=$LOCAL_STORAGE_DIR" > .env.test
+          npx playwright test
+      - name: Bundle secret scan
+        run: |
+          ! grep -rEl "SUPABASE_SERVICE_ROLE_KEY|SIGNING_SECRET|AUTH_ENC_KEY|DATABASE_ADMIN_URL" .next/static || (echo "server-only variable names found in client bundle" && exit 1)

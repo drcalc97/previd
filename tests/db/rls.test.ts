@@ -46,7 +46,9 @@ describe("no identity, no data", () => {
 describe("cross-tenant reads", () => {
   it("a Northfield clinician sees only Northfield patients", async () => {
     const rows = await as("clinician@northfield.demo", "northfield", (tx) => tx`select org_id from patients`);
-    expect(rows.length).toBe(8);
+    const [{ n }] = await admin`select count(*)::int as n from patients where org_id = ${ids["org:northfield"]}`;
+    expect(n).toBeGreaterThanOrEqual(8);
+    expect(rows.length).toBe(n); // sees exactly its own organisation's patients, no more
     expect(new Set(rows.map((r) => r.org_id))).toEqual(new Set([ids["org:northfield"]]));
   });
 

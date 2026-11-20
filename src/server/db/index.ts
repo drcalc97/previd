@@ -23,6 +23,7 @@ export function db(): Sql {
       prepare: false, // compatible with transaction-mode poolers (Supabase Supavisor / PgBouncer)
       idle_timeout: 20,
       onnotice: () => {},
+      ssl: config().DATABASE_SSL === "require" ? "require" : false,
     });
   }
   return g.__previdSql;

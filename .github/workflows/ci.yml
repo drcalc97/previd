@@ -32,6 +32,7 @@ jobs:
       AUTH_ENC_KEY: Y2ktZW5jLWtleS0zMi1ieXRlcy1sb25nLTEyMzQ1Njc=
       CRON_SECRET: test-cron-secret-0000000000
       LOCAL_STORAGE_DIR: .data/test-videos
+      DATABASE_SSL: disable
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -57,7 +58,7 @@ jobs:
           printf '%s\n' "APP_URL=$APP_URL" "DATABASE_URL=$DATABASE_URL" "DATABASE_ADMIN_URL=$DATABASE_ADMIN_URL" \
             "DATABASE_APP_PASSWORD=$DATABASE_APP_PASSWORD" "AUTH_PROVIDER=local" "STORAGE_PROVIDER=local" \
             "PREVID_ALLOW_DEV_ADAPTERS=false" "SIGNING_SECRET=$SIGNING_SECRET" "AUTH_ENC_KEY=$AUTH_ENC_KEY" \
-            "CRON_SECRET=$CRON_SECRET" "LOCAL_STORAGE_DIR=$LOCAL_STORAGE_DIR" > .env.test
+            "CRON_SECRET=$CRON_SECRET" "LOCAL_STORAGE_DIR=$LOCAL_STORAGE_DIR" "DATABASE_SSL=disable" > .env.test
           npx playwright test
       - name: Bundle secret scan
         run: |

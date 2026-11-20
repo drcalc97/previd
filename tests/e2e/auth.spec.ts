@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { alerts, login } from "./helpers";
+import { admin, alerts, login } from "./helpers";
 
 test.describe("authentication", () => {
   test("rejects a wrong password with a generic message", async ({ page }) => {
@@ -65,6 +65,12 @@ test.describe("authentication", () => {
     await page.getByLabel("Email address").fill("admin@riverside.demo");
     await page.getByLabel("Password").fill("PreVid-demo-2026!");
     await page.getByRole("button", { name: "Sign in" }).click();
-    await expect(alerts(page)).toContainText("temporarily locked");
+    // Same generic message as any failure: a "locked" message would reveal that the account exists (SEC-008)...
+    await expect(alerts(page)).toContainText("Email or password is incorrect");
+    // ...but the lock really is in force and is recorded.
+    const sql = admin();
+    const [a] = await sql`select count(*)::int as n from audit_events where action = 'auth.login_failed' and metadata->>'reason' = 'locked'`;
+    await sql.end();
+    expect(a.n).toBeGreaterThan(0);
   });
 });

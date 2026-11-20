@@ -27,7 +27,7 @@ export async function changeRoleAction(slug: string, userId: string, fd: FormDat
 
 export async function setStatusAction(slug: string, userId: string, status: "active" | "suspended") {
   const ctx = await requireOrg(orgSlug.parse(slug));
-  await setMemberStatus(ctx, uuid.parse(userId), status);
+  await setMemberStatus(ctx, uuid.parse(userId), z.enum(["active", "suspended"]).parse(status));
   revalidatePath(`/o/${ctx.orgSlug}/admin/users`);
 }
 

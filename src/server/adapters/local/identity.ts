@@ -52,7 +52,7 @@ async function currentRow() {
 export const localIdentity: IdentityProvider = {
   async signIn(email, password, meta: RequestMeta): Promise<SignInResult> {
     const e = email.trim().toLowerCase().slice(0, 254);
-    const okIp = !meta.ipHash || (await rateLimit(`login:ip:${meta.ipHash}`, 600, 30));
+    const okIp = await rateLimit(`login:ip:${meta.ipHash ?? "unknown"}`, 600, 30); // missing IP shares one bucket (SEC-005)
     const okEmail = await rateLimit(`login:email:${sha(e)}`, 900, 10);
     if (!okIp || !okEmail) return { ok: false, reason: "rate_limited" };
 
@@ -81,7 +81,7 @@ export const localIdentity: IdentityProvider = {
     const token = randomBytes(32).toString("base64url");
     const expires = new Date(Date.now() + ABSOLUTE_MS);
     await withAnon(async (tx) => {
-      await tx`update local_auth.credentials set failed_attempts = 0, locked_until = null where user_id = ${cred.user_id}`;
+      await tx`update local_auth.credentials set failed_attempts = 0, locked_until = null where user_id = ${cred.user_id}`; // TOTP counter deliberately NOT reset (SEC-007)
       await tx`insert into local_auth.sessions(token_hash, user_id, expires_at) values (${sha(token)}, ${cred.user_id}, ${expires})`;
     });
     await setCookie(token, expires);
@@ -132,8 +132,8 @@ export const localIdentity: IdentityProvider = {
     if (step === null) {
       await withAnon(
         (tx) => tx`update local_auth.credentials set
-                     failed_attempts = case when failed_attempts + 1 >= ${MAX_FAILS} then 0 else failed_attempts + 1 end,
-                     locked_until = case when failed_attempts + 1 >= ${MAX_FAILS} then now() + ${LOCK_MS / 1000} * interval '1 second' else locked_until end
+                     totp_failed_attempts = case when totp_failed_attempts + 1 >= ${MAX_FAILS} then 0 else totp_failed_attempts + 1 end,
+                     locked_until = case when totp_failed_attempts + 1 >= ${MAX_FAILS} then now() + ${LOCK_MS / 1000} * interval '1 second' else locked_until end
                    where user_id = ${r.user_id}`,
       );
       return { ok: false };
@@ -141,7 +141,7 @@ export const localIdentity: IdentityProvider = {
     // Success: rotate the session token (defends against session fixation) and mark MFA verified.
     const newToken = randomBytes(32).toString("base64url");
     await withAnon(async (tx) => {
-      await tx`update local_auth.credentials set last_totp_step = ${step}, failed_attempts = 0,
+      await tx`update local_auth.credentials set last_totp_step = ${step}, totp_failed_attempts = 0,
                  totp_enrolled_at = coalesce(totp_enrolled_at, now()) where user_id = ${r.user_id}`;
       await tx`update local_auth.sessions set token_hash = ${sha(newToken)}, mfa_verified_at = now(), last_seen_at = now()
                where id = ${r.id}`;

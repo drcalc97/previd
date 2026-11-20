@@ -32,7 +32,7 @@ export async function seed(sql: Sql) {
     }
     const userIds: Record<string, string> = {};
     for (const u of USERS) {
-      const [row] = await tx`insert into users(email, display_name) values (${u.email}, ${u.name})
+      const [row] = await tx`insert into users(email, display_name, email_verified_at) values (${u.email}, ${u.name}, now())
         on conflict (email) do update set display_name = excluded.display_name returning id`;
       userIds[u.email] = row.id;
       for (const [slug, role] of Object.entries(u.orgs)) {

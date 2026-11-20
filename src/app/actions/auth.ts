@@ -19,7 +19,7 @@ export async function loginAction(_prev: FormState, formData: FormData): Promise
   if (!r.ok) {
     await withAnon((tx) => audit(tx, { orgId: null, actorUserId: null, action: "auth.login_failed", outcome: "denied", ipHash: meta.ipHash, metadata: { reason: r.reason } }));
     if (r.reason === "rate_limited") return { error: "Too many attempts. Please wait a few minutes and try again." };
-    if (r.reason === "locked") return { error: "This account is temporarily locked after repeated failed attempts. Try again in 15 minutes." };
+    // A distinct "locked" message would confirm that the account exists (SEC-008): use the generic one.
     return { error: "Email or password is incorrect." };
   }
   redirect("/login/mfa");

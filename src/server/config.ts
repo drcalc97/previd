@@ -5,6 +5,7 @@ const schema = z.object({
   NODE_ENV: z.string().default("development"),
   APP_URL: z.string().url(),
   DATABASE_URL: z.string().min(1),
+  DATABASE_SSL: z.enum(["require", "disable"]).optional(),
   AUTH_PROVIDER: z.enum(["local", "supabase"]).default("local"),
   STORAGE_PROVIDER: z.enum(["local", "supabase"]).default("local"),
   PREVID_ALLOW_DEV_ADAPTERS: z.string().default("false"),
@@ -35,6 +36,8 @@ export function config(): Config {
     throw new Error("Development auth/storage adapters are disabled in production.");
   }
   if (c.AUTH_PROVIDER === "local" && !c.AUTH_ENC_KEY) throw new Error("AUTH_ENC_KEY is required for the local auth provider");
+  // TLS to the database is required in production unless explicitly disabled (local test servers only).
+  if (c.DATABASE_SSL === undefined) c.DATABASE_SSL = c.NODE_ENV === "production" ? "require" : "disable";
   cached = c;
   return c;
 }

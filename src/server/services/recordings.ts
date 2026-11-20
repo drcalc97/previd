@@ -1,7 +1,7 @@
 import "server-only";
 import { initRecordingInput, type InitRecordingInput } from "@/domain/schemas";
 import { audit } from "../audit";
-import { requirePermission, NotFoundError, ForbiddenError } from "../authz";
+import { requirePermission, NotFoundError } from "../authz";
 import { db, withOrg, type OrgContext } from "../db";
 import { storage } from "../providers";
 import { makeStorageKey, type UploadTarget } from "../ports/storage";
@@ -68,10 +68,14 @@ export async function initRecording(ctx: OrgContext, raw: unknown): Promise<Init
     const [patient] = await tx`select id from patients where id = ${input.patientId} and org_id = ${ctx.orgId} and archived_at is null`;
     if (!patient) return { ok: false as const, error: "Patient not found.", status: 404 };
 
-    const [existing] = await tx`select id, status, recorded_by, storage_key from recordings
+    const [existing] = await tx`select id, status, recorded_by, storage_key, patient_id, mime_type, declared_size_bytes from recordings
                                 where org_id = ${ctx.orgId} and idempotency_key = ${input.idempotencyKey}`;
     if (existing) {
       if (existing.recorded_by !== ctx.userId) return { ok: false as const, error: "Conflict.", status: 409 };
+      // Replaying a key with different content would silently attach the old recording to the wrong patient (SEC-018).
+      if (existing.patient_id !== input.patientId || existing.mime_type !== input.mimeType || Number(existing.declared_size_bytes) !== input.sizeBytes) {
+        return { ok: false as const, error: "This submission does not match the original. Please record again.", status: 409 };
+      }
       if (existing.status === "available") return { ok: true as const, recordingId: existing.id as string, alreadyUploaded: true, key: null };
       if (existing.status === "pending_upload") return { ok: true as const, recordingId: existing.id as string, alreadyUploaded: false, key: existing.storage_key as string };
       return { ok: false as const, error: "This recording can no longer be submitted. Please record again.", status: 409 };
@@ -107,14 +111,17 @@ export async function completeRecording(ctx: OrgContext, recordingId: string): P
   const settings = await getOrgSettings(ctx);
   const [rec] = await withOrg(ctx, (tx) => tx`select * from recordings where id = ${recordingId} and org_id = ${ctx.orgId}`);
   if (!rec) return { ok: false, error: "Recording not found.", status: 404 };
-  if (rec.recorded_by !== ctx.userId) throw new ForbiddenError("recording:create");
+  if (rec.recorded_by !== ctx.userId) return { ok: false, error: "Recording not found.", status: 404 }; // no existence signal (SEC-029)
   if (rec.status === "available") return { ok: true };
   if (rec.status !== "pending_upload") return { ok: false, error: "Recording cannot be completed.", status: 409 };
 
   const st = storage();
   const fail = async (error: string, status = 422) => {
     await st.delete(rec.storage_key);
-    await withOrg(ctx, (tx) => tx`update recordings set status = 'failed', storage_deleted_at = now() where id = ${recordingId} and org_id = ${ctx.orgId}`);
+    await withOrg(ctx, async (tx) => {
+      await tx`update recordings set status = 'failed', storage_deleted_at = now() where id = ${recordingId} and org_id = ${ctx.orgId}`;
+      await audit(tx, { orgId: ctx.orgId, actorUserId: ctx.userId, action: "recording.upload_rejected", targetType: "recording", targetId: recordingId, outcome: "denied", ipHash: ctx.ipHash });
+    });
     return { ok: false as const, error, status };
   };
   const head = await st.head(rec.storage_key);

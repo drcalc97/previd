@@ -34,17 +34,19 @@ const escapeLike = (s: string) => s.replace(/[\\%_]/g, (c) => `\\${c}`);
 export async function listPatients(ctx: OrgContext, q = "", includeArchived = false): Promise<Patient[]> {
   await requirePermission(ctx, "patient:read");
   const term = `%${escapeLike(q.trim().slice(0, 60))}%`;
-  const rows = await withOrg(
-    ctx,
-    (tx) => tx`select p.*, count(r.id) filter (where r.status = 'available') as recording_count,
+  const rows = await withOrg(ctx, async (tx) => {
+    const found = await tx`select p.*, count(r.id) filter (where r.status = 'available') as recording_count,
                       max(r.recorded_at) filter (where r.status = 'available') as latest_recording_at
                from patients p left join recordings r on r.patient_id = p.id and r.org_id = p.org_id
                where p.org_id = ${ctx.orgId}
                  and (${includeArchived} or p.archived_at is null)
                  and (${q.trim() === ""} or p.family_name ilike ${term} or p.given_name ilike ${term}
                       or p.synthetic_ref ilike ${term} or p.nhs_number ilike ${term})
-               group by p.id order by p.family_name, p.given_name limit 100`,
-  );
+               group by p.id order by p.family_name, p.given_name limit 100`;
+    // Bulk PHI read: record that it happened (count only — never the search term) (SEC-015).
+    await audit(tx, { orgId: ctx.orgId, actorUserId: ctx.userId, action: "patient.list", ipHash: ctx.ipHash, metadata: { count: found.length, searched: q.trim() !== "" } });
+    return found;
+  });
   return rows.map(map);
 }
 

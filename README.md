@@ -17,6 +17,7 @@ preoperative-assessment videos and review them in MDT meetings. **Development bu
 | MDT meetings + viewer, admin (users/roles/settings/audit), retention + deletion | Working |
 | Supabase Auth / Storage adapters | **Not written yet** (needs your Supabase project) |
 | Vercel deployment | **Not done** (needs your approval) |
+| Independent security review (static) | Done: 35 findings, most Medium+ addressed or mitigated, **fixes not re-reviewed**; see `docs/security/` |
 | Penetration test, real-device testing, clinical safety sign-off | **Not done** |
 
 ## Quick start (local development)

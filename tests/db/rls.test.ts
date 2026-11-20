@@ -218,3 +218,60 @@ describe("system functions and misc grants", () => {
     await expect(admin`insert into organisations(name, slug, is_synthetic) values ('Real Trust', 'real-trust', false)`).rejects.toThrow(/mvp_synthetic_only/);
   });
 });
+
+describe("security hardening regressions (docs/security/FINDINGS_REGISTER.md)", () => {
+  it("SEC-011: the app role cannot create temp tables to shadow membership checks", async () => {
+    await denied(as("clinician@northfield.demo", "riverside", (tx) => tx.unsafe("create temp table memberships (org_id uuid, user_id uuid, role text, status text)")));
+    const [f] = await admin`select proconfig from pg_proc where proname = 'app_is_member'`;
+    expect(f.proconfig.join(",")).toMatch(/search_path=pg_catalog, public, pg_temp/);
+  });
+
+  it("SEC-011: the app role cannot create objects in the public schema", async () => {
+    await denied(as("clinician@northfield.demo", "northfield", (tx) => tx.unsafe("create table public.pwn (x int)")));
+  });
+
+  it("SEC-014: audit events cannot be attributed to another user", async () => {
+    await denied(as("clinician@northfield.demo", "northfield", (tx) =>
+      tx`insert into audit_events(org_id, actor_user_id, action, outcome) values (${ids["org:northfield"]}, ${ids["admin@northfield.demo"]}, 'patient.view', 'success')`));
+  });
+
+  it("SEC-014: users can change their display name but not their email or status", async () => {
+    const ok = await as("clinician@northfield.demo", "northfield", (tx) => tx`update users set display_name = display_name where id = ${ids["clinician@northfield.demo"]} returning id`);
+    expect(ok.length).toBe(1);
+    await denied(as("clinician@northfield.demo", "northfield", (tx) => tx`update users set email = 'x@y.z' where id = ${ids["clinician@northfield.demo"]}`));
+    await denied(as("clinician@northfield.demo", "northfield", (tx) => tx`update users set status = 'active' where id = ${ids["clinician@northfield.demo"]}`));
+  });
+
+  it("SEC-014: immutable recording columns are frozen (even for the owner)", async () => {
+    const [p] = await admin`select id from patients where org_id = ${ids["org:northfield"]} limit 1`;
+    const [rec] = await admin`insert into recordings(org_id, patient_id, recorded_by, identity_verified_at, identity_checks, storage_key, idempotency_key)
+      values (${ids["org:northfield"]}, ${p.id}, ${ids["clinician@northfield.demo"]}, now(), ${["name", "dob"]}, 'k-freeze', 'idem-key-freeze-0001') returning id`;
+    await expect(admin`update recordings set storage_key = 'k-other' where id = ${rec.id}`).rejects.toThrow(/immutable/);
+    await expect(admin`update recordings set recorded_by = ${ids["admin@northfield.demo"]} where id = ${rec.id}`).rejects.toThrow(/immutable/);
+    await admin`delete from recordings where id = ${rec.id}`;
+  });
+
+  it("SEC-003/004: uploads are only allowed while a recording is pending", async () => {
+    const [p] = await admin`select id from patients where org_id = ${ids["org:northfield"]} limit 1`;
+    const mk = async (key: string, status: string) =>
+      (await admin`insert into recordings(org_id, patient_id, recorded_by, identity_verified_at, identity_checks, storage_key, idempotency_key, status)
+        values (${ids["org:northfield"]}, ${p.id}, ${ids["clinician@northfield.demo"]}, now(), ${["name", "dob"]}, ${key}, ${"idem-" + key + "-padpadpad"}, ${status}) returning id`)[0].id;
+    const a = await mk("k-pend", "pending_upload"), b = await mk("k-avail", "available"), c = await mk("k-del", "deleted");
+    const check = async (k: string) => (await as(null, null, (tx) => tx`select system_upload_allowed(${k}) as ok`))[0].ok;
+    expect(await check("k-pend")).toBe(true);
+    expect(await check("k-avail")).toBe(false);
+    expect(await check("k-del")).toBe(false);
+    expect(await check("k-missing")).toBe(false);
+    await admin`delete from recordings where id in ${admin([a, b, c])}`;
+  });
+
+  it("SEC-001/002: only verified-email users can be found for cross-organisation add", async () => {
+    await admin`insert into users(id, email, display_name) values (gen_random_uuid(), 'unverified@example.test', 'Unverified') on conflict do nothing`;
+    const found = async (email: string) => (await as("admin@northfield.demo", "northfield", (tx) => tx`select app_find_user_id_by_email(${email}) as id`))[0].id;
+    expect(await found("unverified@example.test")).toBeNull();
+    expect(await found("clinician@riverside.demo")).not.toBeNull(); // verified seed user
+    // and a non-admin gets nothing at all
+    const asClin = (await as("clinician@northfield.demo", "northfield", (tx) => tx`select app_find_user_id_by_email('clinician@riverside.demo') as id`))[0].id;
+    expect(asClin).toBeNull();
+  });
+});

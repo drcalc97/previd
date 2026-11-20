@@ -58,7 +58,6 @@ async function reset() {
     throw new Error(`Refusing to reset "${db}" on "${u.hostname}": only local *_dev / *_test databases`);
   }
   await sql.unsafe("drop schema if exists local_auth cascade; drop schema public cascade; create schema public;");
-  await sql.unsafe("grant all on schema public to public");
   console.log("database reset");
 }
 
@@ -69,6 +68,11 @@ try {
   else if (cmd === "setup-app") await setupApp();
   else if (cmd === "reset") await reset();
   else if (cmd === "seed") {
+    // Demo users share a public password: only ever seed local development/test databases.
+    const u = new URL(adminUrl!);
+    if (!["localhost", "127.0.0.1"].includes(u.hostname) || !/_(dev|test)$/.test(u.pathname.slice(1))) {
+      throw new Error("Refusing to seed: demo credentials are only allowed in local *_dev / *_test databases");
+    }
     const { seed } = await import("./seed");
     await seed(sql);
   } else throw new Error(`Unknown command: ${cmd}`);

@@ -183,3 +183,79 @@ test.describe("API hardening", () => {
     void alerts;
   });
 });
+
+test.describe("upload lifecycle abuse (SEC-003/004/018/029)", () => {
+  const init = (page: import("@playwright/test").Page, data: object) => page.request.post("/api/o/northfield/recordings", { data, headers: json });
+  const body = (patientId: string, key: string, over: object = {}) => ({ patientId, idempotencyKey: key, identityChecks: ["name", "dob"], mimeType: "video/webm", sizeBytes: 4096, durationSec: 5, ...over });
+
+  test("an upload token cannot be replayed after the recording is completed", async ({ page }) => {
+    const { pats } = await ids();
+    const p = pats.find((x) => x.slug === "northfield")!;
+    await login(page, "clinician@northfield.demo");
+    const r = await (await init(page, body(p.id, "replay-" + Date.now() + "-abcdefgh"))).json();
+    expect((await page.request.put(r.target.url, { data: fakeWebm(), headers: r.target.headers })).status()).toBe(200);
+    expect((await page.request.post(`/api/o/northfield/recordings/${r.recordingId}/complete`, { data: {}, headers: json })).status()).toBe(200);
+    // Same still-unexpired token, after completion: refused, so verified bytes cannot be swapped.
+    expect((await page.request.put(r.target.url, { data: fakeWebm(), headers: r.target.headers })).status()).toBe(403);
+  });
+
+  test("an upload token cannot resurrect a deleted recording", async ({ page }) => {
+    const { pats } = await ids();
+    const p = pats.find((x) => x.slug === "northfield")!;
+    await login(page, "clinician@northfield.demo");
+    const r = await (await init(page, body(p.id, "resurrect-" + Date.now() + "-abcdefg"))).json();
+    const sql = admin();
+    await sql`update recordings set status = 'deleted', deleted_at = now(), delete_reason = 'wrong_patient' where id = ${r.recordingId}`;
+    await sql.end();
+    expect((await page.request.put(r.target.url, { data: fakeWebm(), headers: r.target.headers })).status()).toBe(403);
+  });
+
+  test("re-using an idempotency key for a different patient or file is refused", async ({ page }) => {
+    const { pats } = await ids();
+    const [a, b] = pats.filter((x) => x.slug === "northfield");
+    await login(page, "clinician@northfield.demo");
+    const key = "idem-mismatch-" + Date.now() + "-abc";
+    expect((await init(page, body(a.id, key))).status()).toBe(200);
+    expect((await init(page, body(a.id, key))).status()).toBe(200); // identical replay is fine
+    expect((await init(page, body(b.id, key))).status()).toBe(409); // different patient
+    expect((await init(page, body(a.id, key, { sizeBytes: 5000 }))).status()).toBe(409); // different file
+  });
+
+  test("another user's recording cannot be completed and reveals nothing", async ({ page, browser }) => {
+    const { pats } = await ids();
+    const p = pats.find((x) => x.slug === "northfield")!;
+    const other = await (await browser.newContext()).newPage();
+    await login(other, "multi@previd.demo");
+    const r = await (await other.request.post("/api/o/northfield/recordings", { data: body(p.id, "other-" + Date.now() + "-abcdefgh"), headers: json })).json();
+    await login(page, "clinician@northfield.demo");
+    expect((await page.request.post(`/api/o/northfield/recordings/${r.recordingId}/complete`, { data: {}, headers: json })).status()).toBe(404);
+  });
+});
+
+test.describe("shadow-account takeover (SEC-001/002)", () => {
+  test("an admin cannot pull an unverified account created by another organisation into their own", async ({ page, browser }) => {
+    const sql = admin();
+    await sql`update local_auth.credentials set locked_until = null, failed_attempts = 0`;
+    await sql.end();
+    const email = `shadow-${Date.now()}@trust-b.example`;
+    // Org A (Riverside) admin pre-creates the victim's address.
+    const a = await (await browser.newContext()).newPage();
+    await login(a, "admin@riverside.demo");
+    await a.goto("/o/riverside/admin/users");
+    await a.getByLabel("Full name").fill("Dr Victim");
+    await a.getByLabel("Email address").fill(email);
+    await a.getByRole("button", { name: "Add user" }).click();
+    await expect(a.getByTestId("temp-password")).toBeVisible();
+    // Org B (Northfield) admin later tries to add the same address: refused, and no membership is created.
+    await login(page, "admin@northfield.demo");
+    await page.goto("/o/northfield/admin/users");
+    await page.getByLabel("Full name").fill("Dr Victim");
+    await page.getByLabel("Email address").fill(email);
+    await page.getByRole("button", { name: "Add user" }).click();
+    await expect(alerts(page).filter({ hasText: "cannot be added directly" })).toBeVisible();
+    const s = admin();
+    const [n] = await s`select count(*)::int as n from memberships m join users u on u.id = m.user_id join organisations o on o.id = m.org_id where u.email = ${email} and o.slug = 'northfield'`;
+    await s.end();
+    expect(n.n).toBe(0);
+  });
+});

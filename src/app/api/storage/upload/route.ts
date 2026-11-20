@@ -3,6 +3,7 @@ import { rename, rm } from "node:fs/promises";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { config } from "@/server/config";
+import { db } from "@/server/db";
 import { ensureDirFor, localPath, verifyToken, writeMeta } from "@/server/adapters/local/storage";
 
 // DEV/TEST storage endpoint (STORAGE_PROVIDER=local). Authorised solely by a short-lived HMAC token.
@@ -15,6 +16,9 @@ export async function PUT(req: Request) {
   const len = Number(req.headers.get("content-length") ?? "0");
   if (!len || len > p.max) return new Response("Payload too large", { status: 413 });
   if (!req.body) return new Response("Bad request", { status: 400 });
+  // The token alone is not enough: the recording must still be pending (blocks replay after complete/delete/purge).
+  const [gate] = await db()`select system_upload_allowed(${p.k}) as ok`;
+  if (!gate.ok) return new Response("Forbidden", { status: 403 });
 
   await ensureDirFor(p.k);
   const dest = localPath(p.k);

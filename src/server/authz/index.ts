@@ -3,7 +3,7 @@ import { cache } from "react";
 import { notFound, redirect } from "next/navigation";
 import { can, type Permission, type Role } from "@/domain/permissions";
 import { audit } from "../audit";
-import { withAnon, withUser, type OrgContext } from "../db";
+import { withUser, type OrgContext } from "../db";
 import { identity } from "../providers";
 import { requestMeta } from "../ratelimit";
 
@@ -61,7 +61,7 @@ async function resolveOrg(userId: string, slug: string): Promise<OrgContext | nu
   );
   const r = rows[0];
   if (!r) {
-    await withAnon((tx) =>
+    await withUser(userId, (tx) =>
       audit(tx, { orgId: null, actorUserId: userId, action: "authz.denied", outcome: "denied", ipHash: meta.ipHash, metadata: { reason: "not_member" } }),
     );
     return null;

@@ -57,6 +57,7 @@ export async function getMeeting(ctx: OrgContext, id: string) {
         .filter((r: Row) => r.patient_id === p.id)
         .map((r: Row) => ({ id: r.id, recordedAt: iso(r.recorded_at)!, durationSec: r.duration_sec, recordedByName: r.display_name })),
     }));
+    await audit(tx, { orgId: ctx.orgId, actorUserId: ctx.userId, action: "mdt.view", targetType: "meeting", targetId: id, ipHash: ctx.ipHash, metadata: { patients: patients.length } });
     return { id: m.id as string, title: m.title as string, scheduledFor: iso(m.scheduled_for)!, patients };
   });
 }

@@ -1,8 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { archivePatientAction } from "@/app/actions/patients";
 import { PatientBanner } from "@/components/patient-banner";
-import { Alert, Badge, Button, Card, LinkButton } from "@/components/ui";
+import { Alert, Badge, Card, LinkButton } from "@/components/ui";
 import { can } from "@/domain/permissions";
 import { uuid } from "@/domain/schemas";
 import { NotFoundError, requireOrg } from "@/server/authz";
@@ -34,9 +33,6 @@ export default async function PatientPage({ params }: { params: Promise<{ org: s
           <LinkButton href={`${base}/patients/${id}/record`}>Record new video</LinkButton>
         )}
         <LinkButton href={`${base}/patients`} variant="secondary">Back to patients</LinkButton>
-        {can(ctx.role, "patient:write") && !patient.archivedAt && (
-          <form action={archivePatientAction.bind(null, ctx.orgSlug, id)}><Button variant="secondary" type="submit">Archive patient</Button></form>
-        )}
       </div>
       <Card aria-labelledby="timeline-h">
         <h2 id="timeline-h" className="mb-3 text-lg font-semibold">Recording timeline</h2>

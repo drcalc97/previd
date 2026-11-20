@@ -39,78 +39,52 @@ test.describe("MDT viewer", () => {
     expect(n.n).toBeGreaterThan(0);
   });
 
-  test("clinician can create a meeting and add a patient", async ({ page }) => {
+  test("clinician builds a numbered discussion list with identity-free 'No PreVid' slots", async ({ page }) => {
+    const { pats } = await ids();
+    const withVideo = pats.find((x) => x.slug === "northfield")!;
     await login(page, "clinician@northfield.demo");
     await page.goto("/o/northfield/mdt");
     await page.getByLabel("Title").fill("E2E MDT");
     await page.getByLabel("Date and time").fill("2030-01-15T09:00");
     await page.getByRole("button", { name: "Create meeting" }).click();
     await expect(page.getByRole("heading", { name: "E2E MDT" })).toBeVisible();
-    // Only patients WITH a recording may be added (no consent basis to show others).
-    const { pats } = await ids();
-    const nor = pats.filter((x) => x.slug === "northfield");
-    const withVideo = nor[0], withoutVideo = nor[nor.length - 1];
-    await createRecordingViaApi(page, "northfield", withVideo.id);
-    await page.reload();
-    const options = await page.getByLabel("Add patient").locator("option").allInnerTexts();
-    expect(options.some((o) => o.includes(withVideo.family_name.toUpperCase()))).toBe(true);
-    const sql = admin();
-    const [ref] = await sql`select synthetic_ref from patients where id = ${withoutVideo.id}`;
-    const [noVid] = await sql`select count(*)::int as n from recordings where patient_id = ${withoutVideo.id} and status = 'available'`;
-    await sql.end();
-    expect(noVid.n).toBe(0);
-    expect(options.join("|")).not.toContain(ref.synthetic_ref);
-    await page.getByLabel("Add patient").selectOption({ label: options.find((o) => o.includes(withVideo.family_name.toUpperCase()))! });
+    const nav = page.getByRole("navigation", { name: "Patients in this meeting" });
+    // 1: a patient being discussed who has no PreVid recording -> placeholder only, no identity
+    await page.getByRole("button", { name: /Add .No PreVid. slot/ }).click();
+    await expect(page.getByTestId("mdt-placeholder")).toHaveText("No PreVid for patient 1");
+    // 2: a patient who does have a recording
+    const select = page.getByLabel("Add patient with a recording");
+    const opts = await select.locator("option").allInnerTexts();
+    await select.selectOption({ label: opts.find((o) => o.includes(withVideo.family_name.toUpperCase()))! });
     await page.getByRole("button", { name: "Add", exact: true }).click();
+    await expect(nav.getByText(new RegExp(`2\\. ${withVideo.family_name.toUpperCase()}`))).toBeVisible();
+    await nav.getByText(new RegExp(`2\\. ${withVideo.family_name.toUpperCase()}`)).click();
     await expect(page.getByTestId("patient-banner")).toBeVisible();
     await expect(page.getByTestId("player")).toBeVisible();
-  });
-});
-
-test.describe("patients", () => {
-  test("create, search and archive a patient", async ({ page }) => {
-    await login(page, "clinician@northfield.demo");
-    await page.goto("/o/northfield/patients/new");
-    await page.getByLabel("Reference").fill("E2E-001");
-    await page.getByLabel("Given name").fill("Zara");
-    await page.getByLabel("Family name").fill("Uniquename");
-    await page.getByLabel("Date of birth").fill("1950-05-05");
-    await page.getByLabel(/NHS number/).fill("999 000 1234");
-    await page.getByRole("button", { name: "Create patient" }).click();
-    await expect(page.getByTestId("patient-banner")).toContainText("UNIQUENAME, Zara");
-    await page.goto("/o/northfield/patients?q=uniquename");
-    await expect(page.getByRole("link", { name: /UNIQUENAME/ })).toBeVisible();
-    await page.getByRole("link", { name: /UNIQUENAME/ }).click();
-    await page.getByRole("button", { name: "Archive patient" }).click();
-    await expect(page).toHaveURL(/\/patients$/); // wait for the action to finish before navigating away
-    await page.goto("/o/northfield/patients?q=uniquename");
-    await expect(page.getByText("No patients found.")).toBeVisible();
+    // 3: another placeholder; numbering follows the discussion order
+    await page.getByRole("button", { name: /Add .No PreVid. slot/ }).click();
+    await expect(nav.getByText("1. No PreVid for patient 1")).toBeVisible();
+    await expect(nav.getByText("3. No PreVid for patient 3")).toBeVisible();
+    // placeholders never store identity (DB columns checked in tests/db/rls.test.ts)
+    await nav.getByText("3. No PreVid for patient 3").click();
+    await page.getByRole("button", { name: "Remove this slot" }).click();
+    await expect(nav.getByText("3. No PreVid for patient 3")).toHaveCount(0);
   });
 
-  test("validation: future DOB and duplicate reference are refused", async ({ page }) => {
-    await login(page, "clinician@northfield.demo");
-    await page.goto("/o/northfield/patients/new");
-    await page.getByLabel("Reference").fill("E2E-DUP");
-    await page.getByLabel("Given name").fill("A");
-    await page.getByLabel("Family name").fill("B");
-    await page.getByLabel("Date of birth").fill("2999-01-01");
-    await page.getByRole("button", { name: "Create patient" }).click();
-    await expect(page.getByText("Invalid date")).toBeVisible();
-    await page.getByLabel("Reference").fill("SYN-NOR-001"); // exists in seed
-    await page.getByLabel("Date of birth").fill("1960-01-01");
-    await page.getByRole("button", { name: "Create patient" }).click();
-    await expect(alerts(page).filter({ hasText: "already exists" })).toBeVisible();
-  });
-
-  test("patient reference unique per organisation, not globally", async ({ page }) => {
-    await login(page, "clinician@riverside.demo");
-    await page.goto("/o/riverside/patients/new");
-    await page.getByLabel("Reference").fill("E2E-001"); // same ref used in Northfield test
-    await page.getByLabel("Given name").fill("Yara");
-    await page.getByLabel("Family name").fill("Otherorg");
-    await page.getByLabel("Date of birth").fill("1955-05-05");
-    await page.getByRole("button", { name: "Create patient" }).click();
-    await expect(page.getByTestId("patient-banner")).toContainText("OTHERORG");
+  test("reviewers see placeholders but cannot add or remove them", async ({ page, browser }) => {
+    const clin = await (await browser.newContext()).newPage();
+    await login(clin, "clinician@northfield.demo");
+    await clin.goto("/o/northfield/mdt");
+    await clin.getByLabel("Title").fill("Placeholder MDT");
+    await clin.getByLabel("Date and time").fill("2030-02-01T09:00");
+    await clin.getByRole("button", { name: "Create meeting" }).click();
+    await clin.getByRole("button", { name: /Add .No PreVid. slot/ }).click();
+    const url = clin.url().split("?")[0];
+    await login(page, "reviewer@northfield.demo");
+    await page.goto(url);
+    await expect(page.getByTestId("mdt-placeholder")).toHaveText("No PreVid for patient 1");
+    await expect(page.getByRole("button", { name: /No PreVid. slot/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Remove this slot" })).toHaveCount(0);
   });
 });
 

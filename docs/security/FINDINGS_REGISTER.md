@@ -182,3 +182,6 @@ Migration `0002_security_hardening.sql`, `local-auth/0002_separate_totp_counter.
 | SEC-035 | Open | Review production logs for DB `detail` values. |
 
 **Open Critical/High:** none Critical; SEC-001 (High) is mitigated but its same-organisation variant remains until the hosted invitation flow exists. **Do not recommend deployment with real data** until it is closed and independently re-tested.
+
+## Changes since the independent review (not reviewed)
+After the remediation above, the following security-relevant code was added and has **not** been independently reviewed: migration `0003_consent_and_placeholders.sql` (`patient_scrub_if_unused`, `patient_scrub_internal`, updated `system_mark_object_deleted`, `mdt_meeting_placeholders` + RLS), patient creation inside `initRecording` (new-patient path, savepoint on unique violation), consent columns and freeze trigger, removal of the standalone patient create/archive endpoints. Regression tests exist for consent being mandatory, scrub authorisation, placeholder RLS and reviewer denial. Re-review recommended before any hosted deployment.

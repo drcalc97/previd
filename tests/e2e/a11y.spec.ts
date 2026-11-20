@@ -23,7 +23,7 @@ test.describe("accessibility (axe, WCAG 2.1 A/AA — automated checks only, not 
     const { pats } = await ids();
     const p = pats.find((x) => x.slug === "northfield")!;
     await login(page, "admin@northfield.demo");
-    for (const path of ["/o/northfield", "/o/northfield/patients", "/o/northfield/patients/new", `/o/northfield/patients/${p.id}`,
+    for (const path of ["/o/northfield", "/o/northfield/patients", "/o/northfield/record", `/o/northfield/patients/${p.id}`,
       `/o/northfield/patients/${p.id}/record`, "/o/northfield/mdt", "/o/northfield/admin/users", "/o/northfield/admin/settings", "/o/northfield/admin/audit"]) {
       await page.goto(path);
       await expect(page.locator("main").first()).toBeVisible();

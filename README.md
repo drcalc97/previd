@@ -13,8 +13,8 @@ preoperative-assessment videos and review them in MDT meetings. **Development bu
 |---|---|
 | Sign-in, mandatory TOTP MFA, lockout, rate limiting | Working (development identity provider) |
 | Organisations, roles, tenant isolation (RLS + app checks) | Working, tested |
-| Patients, identity check, mobile recorder, upload w/ progress + retry, playback, timeline | Working (local dev storage) |
-| MDT meetings + viewer, admin (users/roles/settings/audit), retention + deletion | Working |
+| New-patient recording with consent confirmation (patient created only when saved), identity check, mobile recorder, upload w/ progress + retry, playback, timeline | Working (local dev storage) |
+| MDT meetings (patients with recordings + identity-free "No PreVid" slots) + viewer, admin (users/roles/settings/audit), retention + deletion | Working |
 | Supabase Auth / Storage adapters | **Not written yet** (needs your Supabase project) |
 | Vercel deployment | **Not done** (needs your approval) |
 | Independent security review (static) | Done: 35 findings, most Medium+ addressed or mitigated, **fixes not re-reviewed**; see `docs/security/` |

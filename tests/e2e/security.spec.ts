@@ -27,7 +27,7 @@ test.describe("tenant isolation (HTTP level)", () => {
     const { pats } = await ids();
     const victim = pats.find((p) => p.slug === "riverside")!;
     await login(page, "clinician@northfield.demo");
-    const body = { patientId: victim.id, idempotencyKey: "x".repeat(24), identityChecks: ["name", "dob"], mimeType: "video/webm", sizeBytes: 1000, durationSec: 5 };
+    const body = { patientId: victim.id, idempotencyKey: "x".repeat(24), consentConfirmed: true, identityChecks: ["name", "dob"], mimeType: "video/webm", sizeBytes: 1000, durationSec: 5 };
     // Own org slug, other org's patient -> patient not found
     const a = await page.request.post("/api/o/northfield/recordings", { data: body, headers: json });
     expect(a.status()).toBe(404);
@@ -45,8 +45,8 @@ test.describe("tenant isolation (HTTP level)", () => {
     // Create a Riverside recording through the real flow, then attack it from Northfield.
     const sql = admin();
     const [rv] = await sql`select o.id as org, p.id as pid, u.id as uid from organisations o join patients p on p.org_id = o.id join users u on u.email = 'clinician@riverside.demo' where o.slug = 'riverside' limit 1`;
-    const [rec] = await sql`insert into recordings(org_id, patient_id, recorded_by, identity_verified_at, identity_checks, storage_key, idempotency_key, status, mime_type, size_bytes, duration_sec, purge_after)
-      values (${rv.org}, ${rv.pid}, ${rv.uid}, now(), ${["name", "dob"]}, ${`o/${rv.org}/r/${crypto.randomUUID()}`}, ${"iso-test-" + Date.now() + "-abcdefgh"}, 'available', 'video/webm', 1000, 5, now() + interval '30 days') returning id`;
+    const [rec] = await sql`insert into recordings(org_id, patient_id, recorded_by, identity_verified_at, identity_checks, consent_confirmed_at, consent_confirmed_by, storage_key, idempotency_key, status, mime_type, size_bytes, duration_sec, purge_after)
+      values (${rv.org}, ${rv.pid}, ${rv.uid}, now(), ${["name", "dob"]}, now(), ${rv.uid}, ${`o/${rv.org}/r/${crypto.randomUUID()}`}, ${"iso-test-" + Date.now() + "-abcdefgh"}, 'available', 'video/webm', 1000, 5, now() + interval '30 days') returning id`;
     await sql.end();
     await login(page, "clinician@northfield.demo");
     expect((await page.request.post(`/api/o/northfield/recordings/${rec.id}/playback`, { data: {}, headers: json })).status()).toBe(404);
@@ -78,7 +78,7 @@ test.describe("privilege escalation", () => {
     expect((await page.goto("/o/northfield/patients/new"))?.status()).toBe(404);
     expect((await page.goto(`/o/northfield/patients/${p.id}/record`))?.status()).toBe(404);
     for (const a of ["users", "settings", "audit"]) expect((await page.goto(`/o/northfield/admin/${a}`))?.status(), a).toBe(404);
-    const body = { patientId: p.id, idempotencyKey: "y".repeat(24), identityChecks: ["name", "dob"], mimeType: "video/webm", sizeBytes: 1000, durationSec: 5 };
+    const body = { patientId: p.id, idempotencyKey: "y".repeat(24), consentConfirmed: true, identityChecks: ["name", "dob"], mimeType: "video/webm", sizeBytes: 1000, durationSec: 5 };
     const r = await page.request.post("/api/o/northfield/recordings", { data: body, headers: json });
     expect(r.status()).toBe(403);
     // The denials were audited.
@@ -110,11 +110,30 @@ test.describe("API hardening", () => {
     expect(form.status()).toBe(415);
   });
 
+  test("recording cannot start without an explicit consent confirmation", async ({ page }) => {
+    const { pats } = await ids();
+    const p = pats.find((x) => x.slug === "northfield")!;
+    await login(page, "clinician@northfield.demo");
+    const base = { patientId: p.id, idempotencyKey: "consent-" + Date.now() + "-abcdefgh", identityChecks: ["name", "dob"], mimeType: "video/webm", sizeBytes: 1000, durationSec: 5 };
+    expect((await page.request.post("/api/o/northfield/recordings", { data: base, headers: json })).status()).toBe(400);
+    expect((await page.request.post("/api/o/northfield/recordings", { data: { ...base, consentConfirmed: false }, headers: json })).status()).toBe(400);
+    expect((await page.request.post("/api/o/northfield/recordings", { data: { ...base, consentConfirmed: "true" }, headers: json })).status()).toBe(400);
+  });
+
+  test("a reviewer cannot create a patient by starting a recording", async ({ page }) => {
+    await login(page, "reviewer@northfield.demo");
+    const r = await page.request.post("/api/o/northfield/recordings", {
+      data: { newPatient: { syntheticRef: "REV-" + Date.now(), givenName: "Nope", familyName: "Nope", dateOfBirth: "1970-01-01" }, consentConfirmed: true,
+        idempotencyKey: "rev-" + Date.now() + "-abcdefghij", identityChecks: ["name", "dob"], mimeType: "video/webm", sizeBytes: 1000, durationSec: 5 }, headers: json });
+    expect(r.status()).toBe(403);
+    expect((await page.goto("/o/northfield/record"))?.status()).toBe(404);
+  });
+
   test("oversized or malformed init requests are rejected", async ({ page }) => {
     const { pats } = await ids();
     const p = pats.find((x) => x.slug === "northfield")!;
     await login(page, "clinician@northfield.demo");
-    const base = { patientId: p.id, idempotencyKey: "z".repeat(24), identityChecks: ["name", "dob"], mimeType: "video/webm", durationSec: 5 };
+    const base = { patientId: p.id, idempotencyKey: "z".repeat(24), consentConfirmed: true, identityChecks: ["name", "dob"], mimeType: "video/webm", durationSec: 5 };
     expect((await page.request.post("/api/o/northfield/recordings", { data: { ...base, sizeBytes: 999_999_999 }, headers: json })).status()).toBe(413);
     expect((await page.request.post("/api/o/northfield/recordings", { data: { ...base, sizeBytes: 1000, durationSec: 9999 }, headers: json })).status()).toBe(400);
     expect((await page.request.post("/api/o/northfield/recordings", { data: { ...base, sizeBytes: 1000, mimeType: "application/x-msdownload" }, headers: json })).status()).toBe(400);
@@ -127,7 +146,7 @@ test.describe("API hardening", () => {
     const p = pats.find((x) => x.slug === "northfield")!;
     await login(page, "clinician@northfield.demo");
     const init = await page.request.post("/api/o/northfield/recordings", {
-      data: { patientId: p.id, idempotencyKey: "fake-" + Date.now() + "-abcdefgh", identityChecks: ["name", "dob"], mimeType: "video/webm", sizeBytes: 2000, durationSec: 5 },
+      data: { patientId: p.id, idempotencyKey: "fake-" + Date.now() + "-abcdefgh", consentConfirmed: true, identityChecks: ["name", "dob"], mimeType: "video/webm", sizeBytes: 2000, durationSec: 5 },
       headers: json,
     });
     expect(init.status()).toBe(200);
@@ -139,7 +158,7 @@ test.describe("API hardening", () => {
     expect(done.status()).toBe(422);
     // Wrong content type on the upload URL
     const init2 = await (await page.request.post("/api/o/northfield/recordings", {
-      data: { patientId: p.id, idempotencyKey: "fake2-" + Date.now() + "-abcdefgh", identityChecks: ["name", "dob"], mimeType: "video/webm", sizeBytes: 2000, durationSec: 5 }, headers: json,
+      data: { patientId: p.id, idempotencyKey: "fake2-" + Date.now() + "-abcdefgh", consentConfirmed: true, identityChecks: ["name", "dob"], mimeType: "video/webm", sizeBytes: 2000, durationSec: 5 }, headers: json,
     })).json();
     expect((await page.request.put(init2.target.url, { data: fakeWebm(), headers: { "Content-Type": "text/html" } })).status()).toBe(415);
     // Oversized relative to the signed limit
@@ -186,7 +205,7 @@ test.describe("API hardening", () => {
 
 test.describe("upload lifecycle abuse (SEC-003/004/018/029)", () => {
   const init = (page: import("@playwright/test").Page, data: object) => page.request.post("/api/o/northfield/recordings", { data, headers: json });
-  const body = (patientId: string, key: string, over: object = {}) => ({ patientId, idempotencyKey: key, identityChecks: ["name", "dob"], mimeType: "video/webm", sizeBytes: 4096, durationSec: 5, ...over });
+  const body = (patientId: string, key: string, over: object = {}) => ({ patientId, idempotencyKey: key, consentConfirmed: true, identityChecks: ["name", "dob"], mimeType: "video/webm", sizeBytes: 4096, durationSec: 5, ...over });
 
   test("an upload token cannot be replayed after the recording is completed", async ({ page }) => {
     const { pats } = await ids();

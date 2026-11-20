@@ -27,14 +27,24 @@ export type PatientInput = z.infer<typeof patientInput>;
 export const IDENTITY_CHECKS = ["name", "dob", "nhs_number"] as const;
 export const ALLOWED_MIME = ["video/mp4", "video/webm"] as const;
 
-export const initRecordingInput = z.object({
-  patientId: uuid,
-  idempotencyKey: z.string().min(16).max(80).regex(/^[A-Za-z0-9_-]+$/),
-  identityChecks: z.array(z.enum(IDENTITY_CHECKS)).min(2).refine((a) => new Set(a).size === a.length),
-  mimeType: z.string().transform((m) => m.split(";")[0].trim().toLowerCase()).pipe(z.enum(ALLOWED_MIME)),
-  sizeBytes: z.number().int().positive(),
-  durationSec: z.number().int().min(1).max(900),
-});
+const newPatientInput = patientInput;
+
+/**
+ * Starts a recording. Either an existing patient (`patientId`) or the details of a NEW patient (`newPatient`).
+ * Consent must be confirmed for every recording; a new patient is only created at this point (ADR-017).
+ */
+export const initRecordingInput = z
+  .object({
+    patientId: uuid.optional(),
+    newPatient: newPatientInput.optional(),
+    consentConfirmed: z.literal(true),
+    idempotencyKey: z.string().min(16).max(80).regex(/^[A-Za-z0-9_-]+$/),
+    identityChecks: z.array(z.enum(IDENTITY_CHECKS)).min(2).refine((a) => new Set(a).size === a.length),
+    mimeType: z.string().transform((m) => m.split(";")[0].trim().toLowerCase()).pipe(z.enum(ALLOWED_MIME)),
+    sizeBytes: z.number().int().positive(),
+    durationSec: z.number().int().min(1).max(900),
+  })
+  .refine((v) => (v.patientId === undefined) !== (v.newPatient === undefined), { message: "Provide either patientId or newPatient" });
 export type InitRecordingInput = z.infer<typeof initRecordingInput>;
 
 export const DELETE_REASONS = ["wrong_patient", "poor_quality", "recorded_in_error", "admin_request"] as const;

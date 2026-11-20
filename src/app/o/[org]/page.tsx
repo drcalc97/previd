@@ -18,7 +18,8 @@ export default async function Dashboard({ params }: { params: Promise<{ org: str
         title="Home"
         actions={
           <>
-            <LinkButton href={`${base}/patients`}>{can(ctx.role, "recording:create") ? "Select patient to record" : "Find a patient"}</LinkButton>
+            {can(ctx.role, "recording:create") && <LinkButton href={`${base}/record`}>Record a new patient</LinkButton>}
+            <LinkButton href={`${base}/patients`} variant={can(ctx.role, "recording:create") ? "secondary" : "primary"}>{can(ctx.role, "recording:create") ? "Patients (record again)" : "Find a patient"}</LinkButton>
             <LinkButton href={`${base}/mdt`} variant="secondary">MDT meetings</LinkButton>
           </>
         }

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { addUserInput, initRecordingInput, patientInput, settingsInput } from "@/domain/schemas";
 
 const uuid = "123e4567-e89b-42d3-a456-426614174000";
-const base = { patientId: uuid, idempotencyKey: "a".repeat(20), identityChecks: ["name", "dob"], mimeType: "video/webm", sizeBytes: 1000, durationSec: 10 };
+const base = { patientId: uuid, consentConfirmed: true, idempotencyKey: "a".repeat(20), identityChecks: ["name", "dob"], mimeType: "video/webm", sizeBytes: 1000, durationSec: 10 };
 
 describe("initRecordingInput", () => {
   it("accepts a valid request and normalises codec-qualified mime types", () => {
@@ -21,8 +21,20 @@ describe("initRecordingInput", () => {
     ["fractional size", { sizeBytes: 1.5 }],
     ["too long", { durationSec: 901 }],
     ["zero length", { durationSec: 0 }],
+    ["consent not confirmed", { consentConfirmed: false }],
+    ["consent missing", { consentConfirmed: undefined }],
+    ["both patientId and newPatient", { newPatient: { syntheticRef: "A1", givenName: "A", familyName: "B", dateOfBirth: "1960-01-01" } }],
+    ["neither patientId nor newPatient", { patientId: undefined }],
+    ["invalid new patient", { patientId: undefined, newPatient: { syntheticRef: "bad ref", givenName: "A", familyName: "B", dateOfBirth: "1960-01-01" } }],
   ])("rejects %s", (_n, patch) => {
     expect(initRecordingInput.safeParse({ ...base, ...patch }).success).toBe(false);
+  });
+});
+
+describe("initRecordingInput with a new patient", () => {
+  it("accepts newPatient (no patientId) with consent", () => {
+    const r = initRecordingInput.parse({ ...base, patientId: undefined, newPatient: { syntheticRef: "A-1", givenName: "Ada", familyName: "Testwell", dateOfBirth: "1960-01-01" } });
+    expect(r.newPatient?.givenName).toBe("Ada");
   });
 });
 

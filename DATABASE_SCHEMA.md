@@ -13,7 +13,8 @@ Source of truth: `db/migrations/0001_core.sql` (+ `db/local-auth/0001_local_auth
 | memberships | user ↔ org with role + status | roles: org_admin, clinician, mdt_reviewer |
 | patients | Synthetic patients | unique (org_id, synthetic_ref) |
 | recordings | Video metadata | composite FK (org_id, patient_id); identity_checks ≥ 2; unique (org_id, idempotency_key); opaque unique storage_key |
-| mdt_meetings, mdt_meeting_patients | MDT lists | composite FKs |
+| mdt_meetings, mdt_meeting_patients | MDT lists | composite FKs; only patients with a live recording are shown |
+| mdt_meeting_placeholders | "No PreVid for patient N" slots | no patient columns by design; shares `position` ordering |
 | audit_events | Append-only log | IDs/codes only; metadata < 1 KB; app role has SELECT+INSERT only |
 | rate_limits | Fixed-window counters | no tenant data |
 
@@ -26,6 +27,9 @@ in an **active** org. Policies: reads need membership; writes need `org_admin`/`
 ## System functions (cron, no user session)
 `system_due_recordings(limit)`, `system_mark_object_deleted(id)` (re-checks the row is genuinely due, writes the audit event),
 `system_cleanup()`. These are the only privileged paths for the app role.
+
+## Consent and identity minimisation (migration 0003, ADR-017)
+`recordings.consent_confirmed_at/by` are NOT NULL and immutable. `patient_scrub_if_unused(org, patient)` (SECURITY DEFINER; requires an org admin/clinician of the caller's org) and the internal `patient_scrub_internal` (not callable by the app role; used by `system_mark_object_deleted`) remove identifying details from a patient with no `available`/`pending_upload` recording.
 
 ## Lifecycle of a recording
 `pending_upload → available → deleted` (or `failed`). `purge_after = uploaded_at + retention_days`. Deleted/failed rows keep

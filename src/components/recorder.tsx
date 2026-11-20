@@ -2,12 +2,12 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { Alert, Button, Card } from "@/components/ui";
+import { Alert, Button, Card, Field, Input } from "@/components/ui";
 import { formatDuration, formatDob, formatNhs } from "@/lib/format";
 
 type PatientInfo = { id: string; givenName: string; familyName: string; dateOfBirth: string; nhsNumber: string | null; syntheticRef: string };
 type Limits = { maxDurationSec: number; maxFileBytes: number };
-type Step = "verify" | "camera" | "recording" | "review" | "uploading" | "done";
+type Step = "details" | "verify" | "camera" | "recording" | "review" | "uploading" | "done";
 type Check = "name" | "dob" | "nhs_number";
 
 const MIME_CANDIDATES = ["video/mp4;codecs=avc1.42E01E,mp4a.40.2", "video/mp4", "video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm"];
@@ -20,8 +20,30 @@ const baseMime = (m: string) => m.split(";")[0].trim().toLowerCase();
 const mb = (n: number) => `${(n / 1024 / 1024).toFixed(1)} MB`;
 const newKey = () => (crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`).replace(/[^A-Za-z0-9_-]/g, "") .padEnd(16, "0");
 
-export function Recorder({ slug, patient, limits }: { slug: string; patient: PatientInfo; limits: Limits }) {
-  const [step, setStep] = useState<Step>("verify");
+type Details = { syntheticRef: string; givenName: string; familyName: string; dateOfBirth: string; nhsNumber: string };
+const EMPTY: Details = { syntheticRef: "", givenName: "", familyName: "", dateOfBirth: "", nhsNumber: "" };
+
+function validateDetails(d: Details): Record<string, string> {
+  const e: Record<string, string> = {};
+  if (!/^[A-Za-z0-9._-]{1,40}$/.test(d.syntheticRef.trim())) e.syntheticRef = "Enter a reference (letters, numbers, . _ -).";
+  if (!d.givenName.trim()) e.givenName = "Enter the given name.";
+  if (!d.familyName.trim()) e.familyName = "Enter the family name.";
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d.dateOfBirth) || d.dateOfBirth < "1900-01-01" || d.dateOfBirth > new Date().toISOString().slice(0, 10)) e.dateOfBirth = "Enter a valid date of birth.";
+  if (d.nhsNumber.trim() && !/^\d{10}$/.test(d.nhsNumber.replace(/\s+/g, ""))) e.nhsNumber = "NHS number must be 10 digits.";
+  return e;
+}
+
+/**
+ * Records a video. With `patient` it is a further recording for an existing patient; without, it is a NEW patient:
+ * the details are held only in this browser until upload, and the patient is created on the server together with the
+ * consent confirmation (ADR-017). Consent is confirmed for every recording.
+ */
+export function Recorder({ slug, patient, limits }: { slug: string; patient?: PatientInfo; limits: Limits }) {
+  const [step, setStep] = useState<Step>(patient ? "verify" : "details");
+  const [details, setDetails] = useState<Details>(EMPTY);
+  const [detailErrors, setDetailErrors] = useState<Record<string, string>>({});
+  const [consent, setConsent] = useState(false);
+  const [savedPatientId, setSavedPatientId] = useState<string | null>(patient?.id ?? null);
   const [checks, setChecks] = useState<Set<Check>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [facing, setFacing] = useState<"user" | "environment">("environment");
@@ -44,7 +66,15 @@ export function Recorder({ slug, patient, limits }: { slug: string; patient: Pat
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const startedAtRef = useRef(0);
 
-  const needed: Check[] = patient.nhsNumber ? ["name", "dob", "nhs_number"] : ["name", "dob"];
+  const subject: PatientInfo = patient ?? {
+    id: "",
+    givenName: details.givenName.trim(),
+    familyName: details.familyName.trim(),
+    dateOfBirth: details.dateOfBirth,
+    nhsNumber: details.nhsNumber.replace(/\s+/g, "") || null,
+    syntheticRef: details.syntheticRef.trim(),
+  };
+  const needed: Check[] = subject.nhsNumber ? ["name", "dob", "nhs_number"] : ["name", "dob"];
   const supported = useSyncExternalStore(
     () => () => {},
     () => !!navigator.mediaDevices?.getUserMedia && pickMime() !== null,
@@ -167,7 +197,10 @@ export function Recorder({ slug, patient, limits }: { slug: string; patient: Pat
         method: "POST",
         headers: jsonHeaders,
         body: JSON.stringify({
-          patientId: patient.id,
+          ...(patient
+            ? { patientId: patient.id }
+            : { newPatient: { syntheticRef: subject.syntheticRef, givenName: subject.givenName, familyName: subject.familyName, dateOfBirth: subject.dateOfBirth, nhsNumber: subject.nhsNumber ?? "" } }),
+          consentConfirmed: true,
           idempotencyKey: keyRef.current,
           identityChecks: [...checks],
           mimeType: blob.type,
@@ -185,6 +218,7 @@ export function Recorder({ slug, patient, limits }: { slug: string; patient: Pat
       const doneRes = await fetch(`/api/o/${slug}/recordings/${init.recordingId}/complete`, { method: "POST", headers: jsonHeaders, body: "{}" });
       const done = await doneRes.json().catch(() => ({}));
       if (!doneRes.ok) throw new Error(done.error ?? "The server could not confirm the upload.");
+      setSavedPatientId(init.patientId);
       // Success: release local copies.
       blobRef.current = null;
       if (reviewUrl) URL.revokeObjectURL(reviewUrl);
@@ -205,10 +239,10 @@ export function Recorder({ slug, patient, limits }: { slug: string; patient: Pat
   }
 
   const toggle = (c: Check) => setChecks((s) => { const n = new Set(s); if (n.has(c)) n.delete(c); else n.add(c); return n; });
-  const verified = needed.every((c) => checks.has(c)); // every displayed identifier must be confirmed
+  const verified = consent && needed.every((c) => checks.has(c)); // consent AND every displayed identifier must be confirmed
 
   const h = "mb-3 text-xl font-semibold outline-none";
-  const back = `/o/${slug}/patients/${patient.id}`;
+  const back = savedPatientId ? `/o/${slug}/patients/${savedPatientId}` : `/o/${slug}/patients`;
 
   return (
     <div className="mx-auto max-w-2xl">
@@ -217,18 +251,63 @@ export function Recorder({ slug, patient, limits }: { slug: string; patient: Pat
         {step === "recording" ? "Recording started" : step === "review" ? "Recording stopped. Review your recording." : step === "done" ? "Recording saved." : ""}
       </div>
 
+      {step === "details" && (
+        <Card aria-labelledby="details-h">
+          <h2 id="details-h" ref={headingRef} tabIndex={-1} className={h}>1. Patient details</h2>
+          <Alert tone="info" title="Nothing is stored yet">These details stay in this browser until you confirm consent and upload the recording. If you cancel, no patient record is created.</Alert>
+          <form
+            className="mt-4 flex flex-col gap-4"
+            noValidate
+            onSubmit={(ev) => {
+              ev.preventDefault();
+              const errs = validateDetails(details);
+              setDetailErrors(errs);
+              if (Object.keys(errs).length === 0) setStep("verify");
+            }}
+          >
+            {([
+              ["syntheticRef", "Reference", "text", "Hospital or synthetic reference number."],
+              ["givenName", "Given name", "text", ""],
+              ["familyName", "Family name", "text", ""],
+              ["dateOfBirth", "Date of birth", "date", ""],
+              ["nhsNumber", "NHS number (synthetic, optional)", "text", "10 digits."],
+            ] as const).map(([k, label, type, hint]) => (
+              <Field key={k} label={label} htmlFor={`d-${k}`} hint={hint || undefined} error={detailErrors[k]}>
+                <Input id={`d-${k}`} type={type} autoComplete="off" inputMode={k === "nhsNumber" ? "numeric" : undefined}
+                  value={details[k]} onChange={(e) => setDetails((d) => ({ ...d, [k]: e.target.value }))}
+                  aria-describedby={hint ? `d-${k}-hint` : undefined} aria-invalid={detailErrors[k] ? true : undefined} />
+              </Field>
+            ))}
+            <div className="flex flex-wrap gap-2">
+              <Button type="submit">Continue</Button>
+              <Link href={`/o/${slug}/patients`} className="inline-flex min-h-11 items-center px-3 underline">Cancel</Link>
+            </div>
+          </form>
+        </Card>
+      )}
+
       {step === "verify" && (
         <Card aria-labelledby="verify-h">
-          <h2 id="verify-h" ref={headingRef} tabIndex={-1} className={h}>1. Confirm patient identity</h2>
+          <h2 id="verify-h" ref={headingRef} tabIndex={-1} className={h}>{patient ? "1. Confirm consent and identity" : "2. Confirm consent and identity"}</h2>
           {!supported && (
             <div className="mb-4"><Alert tone="warn" title="This browser cannot record video">Use a current version of Safari (iOS 14.3+), Chrome, Edge or Firefox, and open PreVid in the browser itself rather than inside another app.</Alert></div>
           )}
           <p className="mb-3 text-muted">Ask the patient to state their full name and date of birth. Tick each item that matches the patient in front of you.</p>
           <div className="mb-4 rounded-lg border-2 border-primary p-3">
-            <p className="text-lg font-semibold">{patient.familyName.toUpperCase()}, {patient.givenName}</p>
-            <p>Date of birth: <strong>{formatDob(patient.dateOfBirth)}</strong></p>
-            {patient.nhsNumber && <p>NHS number (synthetic): <strong>{formatNhs(patient.nhsNumber)}</strong></p>}
+            <p className="text-lg font-semibold">{subject.familyName.toUpperCase()}, {subject.givenName}</p>
+            <p>Date of birth: <strong>{formatDob(subject.dateOfBirth)}</strong></p>
+            {subject.nhsNumber && <p>NHS number (synthetic): <strong>{formatNhs(subject.nhsNumber)}</strong></p>}
           </div>
+          <fieldset className="mb-4 flex flex-col gap-3 rounded-lg border border-border p-3">
+            <legend className="px-1 font-semibold">Consent</legend>
+            <label className="flex items-start gap-3 text-base">
+              <input type="checkbox" className="mt-1 h-6 w-6 shrink-0" checked={consent} onChange={() => setConsent((c) => !c)} />
+              <span>
+                The patient has been told what PreVid is, who may view the recording and for how long it is kept, and agrees to being recorded and to
+                their details and video being stored{patient ? "" : " (the patient record is only created when this recording is saved)"}.
+              </span>
+            </label>
+          </fieldset>
           <fieldset className="mb-4 flex flex-col gap-3">
             <legend className="sr-only">Identity checks</legend>
             {needed.map((c) => (
@@ -238,18 +317,22 @@ export function Recorder({ slug, patient, limits }: { slug: string; patient: Pat
               </label>
             ))}
           </fieldset>
-          <Alert tone="info">Only record patients who have agreed to be recorded, following your organisation&apos;s consent process.</Alert>
+          <Alert tone="info">Follow your organisation&apos;s consent process. The consent wording here is a draft awaiting information-governance review.</Alert>
           <div className="mt-4 flex flex-wrap gap-2">
             <Button onClick={() => openCamera()} disabled={!verified || !supported}>Continue to camera</Button>
-            <Link href={back} className="inline-flex min-h-11 items-center px-3 underline">Cancel</Link>
+            {patient ? (
+              <Link href={back} className="inline-flex min-h-11 items-center px-3 underline">Cancel</Link>
+            ) : (
+              <Button variant="ghost" onClick={() => setStep("details")}>Back</Button>
+            )}
           </div>
         </Card>
       )}
 
       {(step === "camera" || step === "recording") && (
         <Card aria-labelledby="cam-h">
-          <h2 id="cam-h" ref={headingRef} tabIndex={-1} className={h}>{step === "camera" ? "2. Position the camera" : "Recording"}</h2>
-          <p className="mb-2 text-sm text-muted">{patient.familyName.toUpperCase()}, {patient.givenName} · DOB {formatDob(patient.dateOfBirth)}</p>
+          <h2 id="cam-h" ref={headingRef} tabIndex={-1} className={h}>{step === "camera" ? (patient ? "2. Position the camera" : "3. Position the camera") : "Recording"}</h2>
+          <p className="mb-2 text-sm text-muted">{subject.familyName.toUpperCase()}, {subject.givenName} · DOB {formatDob(subject.dateOfBirth)}</p>
           <video ref={liveRef} muted playsInline autoPlay className="aspect-video w-full rounded-lg bg-black" aria-label="Camera preview" />
           {step === "recording" && (
             <p role="timer" className="my-3 text-center text-3xl font-semibold tabular-nums" data-testid="rec-timer">
@@ -273,8 +356,8 @@ export function Recorder({ slug, patient, limits }: { slug: string; patient: Pat
 
       {step === "review" && reviewUrl && (
         <Card aria-labelledby="rev-h">
-          <h2 id="rev-h" ref={headingRef} tabIndex={-1} className={h}>3. Review the recording</h2>
-          <p className="mb-2 text-sm text-muted">{patient.familyName.toUpperCase()}, {patient.givenName} · DOB {formatDob(patient.dateOfBirth)}</p>
+          <h2 id="rev-h" ref={headingRef} tabIndex={-1} className={h}>{patient ? "3. Review the recording" : "4. Review the recording"}</h2>
+          <p className="mb-2 text-sm text-muted">{subject.familyName.toUpperCase()}, {subject.givenName} · DOB {formatDob(subject.dateOfBirth)}</p>
           <video src={reviewUrl} controls playsInline className="aspect-video w-full rounded-lg bg-black" aria-label="Recorded video for review" data-testid="review-video" />
           <p className="mt-2 text-sm text-muted">{reviewInfo ? `${formatDuration(reviewInfo.duration)} · ${mb(reviewInfo.size)}` : ""}</p>
           <div className="mt-3 flex flex-wrap gap-2">
@@ -298,8 +381,8 @@ export function Recorder({ slug, patient, limits }: { slug: string; patient: Pat
       {step === "done" && (
         <Card aria-labelledby="done-h">
           <h2 id="done-h" ref={headingRef} tabIndex={-1} className={h}>Recording saved</h2>
-          <Alert tone="ok" title="Upload confirmed by the server">
-            <p>Recording for {patient.familyName.toUpperCase()}, {patient.givenName} saved{savedAt ? ` at ${savedAt.toLocaleTimeString("en-GB")}` : ""}.</p>
+          <Alert tone="ok" title="Upload and consent confirmed by the server">
+            <p>Recording for {subject.familyName.toUpperCase()}, {subject.givenName} saved{savedAt ? ` at ${savedAt.toLocaleTimeString("en-GB")}` : ""}.</p>
           </Alert>
           <div className="mt-4 flex flex-wrap gap-2">
             <Link href={back} className="inline-flex min-h-11 items-center justify-center rounded-lg bg-primary px-4 py-2 font-medium text-primary-fg" data-testid="back-to-patient">Back to patient record</Link>

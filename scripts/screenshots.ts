@@ -49,6 +49,15 @@ async function main() {
   const m = await mk(true);
   const mp = await m.newPage();
   await login(mp, "clinician@northfield.demo");
+  await mp.goto(`${BASE}/o/northfield/record`);
+  await mp.screenshot({ path: `${OUT}/04a-new-patient-details-mobile.png` });
+  await mp.getByLabel("Reference").fill("DEMO-001");
+  await mp.getByLabel("Given name").fill("Nova");
+  await mp.getByLabel("Family name").fill("Demonstrator");
+  await mp.getByLabel("Date of birth").fill("1962-03-04");
+  await mp.getByRole("button", { name: "Continue" }).click();
+  await mp.getByRole("heading", { name: /Confirm consent and identity/ }).waitFor();
+  await mp.screenshot({ path: `${OUT}/04b-consent-identity-mobile.png`, fullPage: true });
   await mp.goto(`${BASE}${firstPatient}/record`);
   await mp.screenshot({ path: `${OUT}/04-record-verify-mobile.png` });
   for (const c of await mp.getByRole("checkbox").all()) await c.check();
@@ -68,7 +77,9 @@ async function main() {
   await m.close();
   { const pid = firstPatient!.split("/").pop()!;
     await admin`insert into mdt_meeting_patients(org_id, meeting_id, patient_id, position)
-      select m.org_id, m.id, ${pid}, 99 from mdt_meetings m join organisations o on o.id = m.org_id where o.slug = 'northfield' limit 1 on conflict do nothing`; }
+      select m.org_id, m.id, ${pid}, 1 from mdt_meetings m join organisations o on o.id = m.org_id where o.slug = 'northfield' limit 1 on conflict do nothing`;
+    await admin`insert into mdt_meeting_placeholders(org_id, meeting_id, position)
+      select m.org_id, m.id, p from mdt_meetings m join organisations o on o.id = m.org_id, unnest(array[0, 2]) as p where o.slug = 'northfield' and not exists (select 1 from mdt_meeting_placeholders x where x.meeting_id = m.id)`; }
 
   await page.goto(`${BASE}${firstPatient}`);
   await page.screenshot({ path: `${OUT}/09-patient-timeline.png` });

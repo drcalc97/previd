@@ -15,14 +15,14 @@ export default async function PatientsPage({ params, searchParams }: { params: P
   const base = `/o/${ctx.orgSlug}`;
   return (
     <>
-      <PageHeader title="Patients" actions={can(ctx.role, "patient:write") && <LinkButton href={`${base}/patients/new`}>New patient</LinkButton>} />
+      <PageHeader title="Patients" actions={can(ctx.role, "recording:create") && <LinkButton href={`${base}/record`}>Record a new patient</LinkButton>} />
       <form role="search" className="mb-4 flex gap-2" action="">
         <label htmlFor="q" className="sr-only">Search patients by name, reference or NHS number</label>
         <Input id="q" name="q" defaultValue={q} placeholder="Search by name, reference or NHS number" className="max-w-md" />
         <Button type="submit" variant="secondary">Search</Button>
       </form>
       {patients.length === 0 ? (
-        <p className="text-muted">No patients found.</p>
+        <p className="text-muted">No patients found. Patients appear here once they have consented to a PreVid recording.</p>
       ) : (
         <Table caption="Patients">
           <thead><tr><Th>Name</Th><Th>Date of birth</Th><Th>NHS number (synthetic)</Th><Th>Reference</Th><Th>Recordings</Th></tr></thead>

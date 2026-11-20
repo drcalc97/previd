@@ -1,4 +1,6 @@
 /** Synthetic seed data. All people, numbers and organisations here are fictitious. */
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type { Sql } from "postgres";
 import { hashPassword } from "../src/server/adapters/local/password";
 
@@ -46,26 +48,41 @@ export async function seed(sql: Sql) {
           on conflict do nothing`;
       }
     }
+    // Patients exist only together with a consented recording (ADR-017), so each seeded patient gets one
+    // (a short synthetic WebM copied into local dev storage). Dates vary to demo the "older recording" warning.
+    const sample = existsSync("tests/fixtures/sample.webm") ? readFileSync("tests/fixtures/sample.webm") : null;
+    const storageDir = process.env.LOCAL_STORAGE_DIR ?? ".data/videos";
     let n = 0;
     for (const o of ORGS) {
-      const creator = userIds[o.slug === "northfield" ? "clinician@northfield.demo" : "clinician@riverside.demo"];
-      const patientIds: string[] = [];
-      for (let i = 0; i < 8; i++) {
+      const clin = o.slug === "northfield" ? "clinician@northfield.demo" : "clinician@riverside.demo";
+      const creator = userIds[clin];
+      const ages = [0, 10, 45];
+      for (let i = 0; i < 3; i++) {
         n++;
         const dob = new Date(Date.UTC(1940 + ((i * 7 + n) % 45), (i * 5) % 12, 1 + ((i * 3) % 27)));
+        const ref = `SYN-${o.slug.slice(0, 3).toUpperCase()}-${String(i + 1).padStart(3, "0")}`;
         const [p] = await tx`insert into patients(org_id, synthetic_ref, given_name, family_name, date_of_birth, nhs_number, created_by)
-          values (${orgIds[o.slug]}, ${`SYN-${o.slug.slice(0, 3).toUpperCase()}-${String(i + 1).padStart(3, "0")}`},
-                  ${GIVEN[(i + n) % GIVEN.length]}, ${FAMILY[(i * 3 + n) % FAMILY.length]},
+          values (${orgIds[o.slug]}, ${ref}, ${GIVEN[(i + n) % GIVEN.length]}, ${FAMILY[(i * 3 + n) % FAMILY.length]},
                   ${dob.toISOString().slice(0, 10)}, ${String(9990000000 + n * 7919).slice(0, 10)}, ${creator})
           on conflict (org_id, synthetic_ref) do update set given_name = excluded.given_name returning id`;
-        patientIds.push(p.id);
+        const has = await tx`select 1 from recordings where patient_id = ${p.id} limit 1`;
+        if (has.length || !sample) continue;
+        const [{ id }] = await tx`select gen_random_uuid() as id`;
+        const key = `o/${orgIds[o.slug]}/r/${id}`;
+        mkdirSync(dirname(join(storageDir, key)), { recursive: true });
+        writeFileSync(join(storageDir, key), sample);
+        writeFileSync(join(storageDir, `${key}.meta.json`), JSON.stringify({ contentType: "video/webm" }));
+        await tx`insert into recordings(id, org_id, patient_id, recorded_by, identity_verified_at, identity_checks, consent_confirmed_at, consent_confirmed_by,
+                    status, storage_key, mime_type, declared_size_bytes, size_bytes, duration_sec, idempotency_key, recorded_at, uploaded_at, purge_after)
+          values (${id}, ${orgIds[o.slug]}, ${p.id}, ${creator}, now(), ${["name", "dob"]}, now(), ${creator},
+                  'available', ${key}, 'video/webm', ${sample.length}, ${sample.length}, 2, ${`seed-${id}-padpadpad`},
+                  now() - ${ages[i]} * interval '1 day', now() - ${ages[i]} * interval '1 day', now() + interval '365 days')`;
       }
       const existing = await tx`select 1 from mdt_meetings where org_id = ${orgIds[o.slug]} limit 1`;
       if (!existing.length) {
-        const [m] = await tx`insert into mdt_meetings(org_id, title, scheduled_for, created_by)
-          values (${orgIds[o.slug]}, 'Pre-op MDT (synthetic)', now() + interval '2 days', ${creator}) returning id`;
-        // Patients are only added to an MDT list once they have a recording (ADR-016); the list starts empty.
-        void patientIds;
+        // The MDT list starts empty; patients with recordings (or "No PreVid" slots) are added by users.
+        await tx`insert into mdt_meetings(org_id, title, scheduled_for, created_by)
+          values (${orgIds[o.slug]}, 'Pre-op MDT (synthetic)', now() + interval '2 days', ${creator})`;
       }
     }
   });

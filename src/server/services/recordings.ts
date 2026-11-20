@@ -39,7 +39,7 @@ const UPLOAD_URL_TTL_SEC = 900;
 const PLAYBACK_TTL_SEC = 120;
 
 export type InitResult =
-  | { ok: true; recordingId: string; alreadyUploaded: boolean; target?: UploadTarget }
+  | { ok: true; recordingId: string; patientId: string; alreadyUploaded: boolean; target?: UploadTarget }
   | { ok: false; error: string; status: number };
 
 export async function getOrgSettings(ctx: OrgContext) {
@@ -64,39 +64,68 @@ export async function initRecording(ctx: OrgContext, raw: unknown): Promise<Init
   if (input.sizeBytes > settings.maxFileBytes) return { ok: false, error: "Recording is larger than this organisation allows.", status: 413 };
   if (input.durationSec > settings.maxDurationSec) return { ok: false, error: "Recording is longer than this organisation allows.", status: 413 };
 
-  const result = await withOrg(ctx, async (tx) => {
-    const [patient] = await tx`select id from patients where id = ${input.patientId} and org_id = ${ctx.orgId} and archived_at is null`;
-    if (!patient) return { ok: false as const, error: "Patient not found.", status: 404 };
+  if (input.newPatient) await requirePermission(ctx, "patient:write");
 
-    const [existing] = await tx`select id, status, recorded_by, storage_key, patient_id, mime_type, declared_size_bytes from recordings
-                                where org_id = ${ctx.orgId} and idempotency_key = ${input.idempotencyKey}`;
+  const result = await withOrg(ctx, async (tx) => {
+    const [existing] = await tx`select r.id, r.status, r.recorded_by, r.storage_key, r.patient_id, r.mime_type, r.declared_size_bytes,
+                                       p.synthetic_ref, p.given_name, p.family_name
+                                from recordings r join patients p on p.id = r.patient_id and p.org_id = r.org_id
+                                where r.org_id = ${ctx.orgId} and r.idempotency_key = ${input.idempotencyKey}`;
     if (existing) {
       if (existing.recorded_by !== ctx.userId) return { ok: false as const, error: "Conflict.", status: 409 };
       // Replaying a key with different content would silently attach the old recording to the wrong patient (SEC-018).
-      if (existing.patient_id !== input.patientId || existing.mime_type !== input.mimeType || Number(existing.declared_size_bytes) !== input.sizeBytes) {
+      const samePatient = input.patientId
+        ? existing.patient_id === input.patientId
+        : existing.synthetic_ref === input.newPatient!.syntheticRef && existing.given_name === input.newPatient!.givenName && existing.family_name === input.newPatient!.familyName;
+      if (!samePatient || existing.mime_type !== input.mimeType || Number(existing.declared_size_bytes) !== input.sizeBytes) {
         return { ok: false as const, error: "This submission does not match the original. Please record again.", status: 409 };
       }
-      if (existing.status === "available") return { ok: true as const, recordingId: existing.id as string, alreadyUploaded: true, key: null };
-      if (existing.status === "pending_upload") return { ok: true as const, recordingId: existing.id as string, alreadyUploaded: false, key: existing.storage_key as string };
+      const base = { ok: true as const, recordingId: existing.id as string, patientId: existing.patient_id as string };
+      if (existing.status === "available") return { ...base, alreadyUploaded: true, key: null };
+      if (existing.status === "pending_upload") return { ...base, alreadyUploaded: false, key: existing.storage_key as string };
       return { ok: false as const, error: "This recording can no longer be submitted. Please record again.", status: 409 };
     }
+
+    let patientId: string;
+    if (input.newPatient) {
+      // A patient is added to the system ONLY here, together with the consent confirmation for this recording (ADR-017).
+      const np = input.newPatient;
+      patientId = (await tx`select gen_random_uuid() as id`)[0].id as string;
+      try {
+        await tx.savepoint(
+          (sp) => sp`insert into patients(id, org_id, synthetic_ref, given_name, family_name, date_of_birth, nhs_number, created_by)
+                     values (${patientId}, ${ctx.orgId}, ${np.syntheticRef}, ${np.givenName}, ${np.familyName}, ${np.dateOfBirth}, ${np.nhsNumber || null}, ${ctx.userId})`,
+        );
+      } catch (e) {
+        if ((e as { code?: string }).code === "23505") {
+          return { ok: false as const, error: "A patient with that reference already exists. Find them in the patient list and record from their record.", status: 409 };
+        }
+        throw e;
+      }
+      await audit(tx, { orgId: ctx.orgId, actorUserId: ctx.userId, action: "patient.create", targetType: "patient", targetId: patientId, ipHash: ctx.ipHash });
+    } else {
+      const [patient] = await tx`select id from patients where id = ${input.patientId!} and org_id = ${ctx.orgId} and archived_at is null`;
+      if (!patient) return { ok: false as const, error: "Patient not found.", status: 404 };
+      patientId = patient.id as string;
+    }
+
     const [{ id }] = await tx`select gen_random_uuid() as id`;
     const key = makeStorageKey(ctx.orgId, id);
-    await tx`insert into recordings(id, org_id, patient_id, recorded_by, identity_verified_at, identity_checks, storage_key,
-                                    mime_type, declared_size_bytes, duration_sec, idempotency_key)
-             values (${id}, ${ctx.orgId}, ${input.patientId}, ${ctx.userId}, now(), ${input.identityChecks}, ${key},
+    await tx`insert into recordings(id, org_id, patient_id, recorded_by, identity_verified_at, identity_checks, consent_confirmed_at, consent_confirmed_by,
+                                    storage_key, mime_type, declared_size_bytes, duration_sec, idempotency_key)
+             values (${id}, ${ctx.orgId}, ${patientId}, ${ctx.userId}, now(), ${input.identityChecks}, now(), ${ctx.userId}, ${key},
                      ${input.mimeType}, ${input.sizeBytes}, ${input.durationSec}, ${input.idempotencyKey})`;
-    await audit(tx, { orgId: ctx.orgId, actorUserId: ctx.userId, action: "recording.init", targetType: "recording", targetId: id, ipHash: ctx.ipHash });
-    return { ok: true as const, recordingId: id as string, alreadyUploaded: false, key };
+    await audit(tx, { orgId: ctx.orgId, actorUserId: ctx.userId, action: "recording.init", targetType: "recording", targetId: id, ipHash: ctx.ipHash, metadata: { consent: true, new_patient: !!input.newPatient } });
+    return { ok: true as const, recordingId: id as string, patientId, alreadyUploaded: false, key };
   });
   if (!result.ok) return result;
-  if (result.alreadyUploaded || !result.key) return { ok: true, recordingId: result.recordingId, alreadyUploaded: true };
+  if (result.alreadyUploaded || !result.key) return { ok: true, recordingId: result.recordingId, patientId: result.patientId, alreadyUploaded: true };
   const target = await storage().createUploadTarget(result.key, {
     mimeType: input.mimeType,
     maxBytes: Math.min(settings.maxFileBytes, Math.ceil(input.sizeBytes * 1.02) + 1024),
     expiresInSec: UPLOAD_URL_TTL_SEC,
   });
-  return { ok: true, recordingId: result.recordingId, alreadyUploaded: false, target };
+  return { ok: true, recordingId: result.recordingId, patientId: result.patientId, alreadyUploaded: false, target };
 }
 
 function sniffMime(head: Buffer): "video/mp4" | "video/webm" | null {
@@ -120,6 +149,7 @@ export async function completeRecording(ctx: OrgContext, recordingId: string): P
     await st.delete(rec.storage_key);
     await withOrg(ctx, async (tx) => {
       await tx`update recordings set status = 'failed', storage_deleted_at = now() where id = ${recordingId} and org_id = ${ctx.orgId}`;
+      await tx`select patient_scrub_if_unused(${ctx.orgId}, ${rec.patient_id})`; // a patient left with no recording keeps no identity
       await audit(tx, { orgId: ctx.orgId, actorUserId: ctx.userId, action: "recording.upload_rejected", targetType: "recording", targetId: recordingId, outcome: "denied", ipHash: ctx.ipHash });
     });
     return { ok: false as const, error, status };
@@ -183,6 +213,8 @@ export async function deleteRecording(ctx: OrgContext, id: string, reason: "wron
   await withOrg(ctx, async (tx) => {
     await tx`update recordings set status = 'deleted', deleted_at = now(), deleted_by = ${ctx.userId}, delete_reason = ${reason}
              where id = ${id} and org_id = ${ctx.orgId}`;
+    const [pr] = await tx`select patient_id from recordings where id = ${id} and org_id = ${ctx.orgId}`;
+    await tx`select patient_scrub_if_unused(${ctx.orgId}, ${pr.patient_id})`; // no recording left => identity is removed
     await audit(tx, { orgId: ctx.orgId, actorUserId: ctx.userId, action: "recording.delete", targetType: "recording", targetId: id, ipHash: ctx.ipHash, metadata: { reason } });
   });
   // Best effort now; the retention sweep retries any object not yet removed (storage_deleted_at is null).

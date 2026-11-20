@@ -10,13 +10,14 @@ Out of scope: AI interpretation, frailty scoring, diagnosis, risk prediction, EP
 - **Organisation admin (Trust IT/governance):** manages users, retention, audits access.
 
 ## Core workflow
-Sign in (+MFA) → choose patient → **confirm identity** (name, DOB, NHS no. each ticked) → camera → record (≤ 3 min) → review → confirm & upload (progress,
-retry) → "Recording saved" → back to patient record with timeline.
+Sign in (+MFA) → **new patient**: enter details (held only in the browser) → **confirm consent** and identity (name, DOB, NHS no. each ticked) → camera → record (≤ 3 min) → review → confirm & upload (progress, retry) → "Recording saved" → patient record with timeline. A patient is created on the server only at that moment. Further recordings of an existing patient also require a fresh consent confirmation. Patients exist only while they have a recording (their identity is scrubbed when the last one is deleted/purged).
+
+**MDT:** the discussion list shows only patients with a PreVid recording, plus identity-free "No PreVid for patient N" slots numbered by discussion order.
 
 ## User stories & acceptance criteria (abridged)
 | Story | Acceptance |
 |---|---|
-| Record a patient | Cannot reach the camera until every displayed identifier is ticked; recording auto-stops at the org limit; no save to photo library; confirmation only after the server verifies the file. |
+| Record a patient | Cannot reach the camera until consent AND every displayed identifier are ticked; a new patient exists on the server only after upload;  recording auto-stops at the org limit; no save to photo library; confirmation only after the server verifies the file. |
 | Recover from poor connectivity | Failed upload keeps the local copy, shows a plain message and Retry; retries never create duplicates. |
 | Review at MDT | Patient list shows latest video date; viewer shows patient banner, recording date/age, older-than-30-days warning, all recordings newest first. |
 | Least privilege | Reviewers cannot create/record/edit; clinicians cannot administer; admins can view video (owner decision); every denial is audited and shows a 404. |
@@ -28,5 +29,5 @@ Wrong patient recorded or reviewed; stale video relied on; video used as sole ba
 confirmed; device retains local copy; real data entered into a synthetic build.
 
 ## Open product questions
-Consent capture model; whether to show patient-level "latest recording older than X" warnings in worklists; MDT list creation workflow with the real service;
+Final consent wording and evidence/withdrawal model (draft only; IG review needed); whether to show patient-level "latest recording older than X" warnings in worklists; MDT list creation workflow with the real service;
 who may delete other people's recordings; export/download policy (currently no download control).

@@ -63,7 +63,7 @@ export async function createRecordingViaApi(page: Page, org: string, patientId: 
   const video = readFileSync("tests/fixtures/sample.webm"); // a real, playable 2 s WebM
   const json = { "Content-Type": "application/json", Origin: "http://localhost:3100" };
   const init = await page.request.post(`/api/o/${org}/recordings`, {
-    data: { patientId, idempotencyKey: `seed-${Date.now()}-${Math.random().toString(36).slice(2)}-xxxx`, identityChecks: ["name", "dob"], mimeType: "video/webm", sizeBytes: video.length, durationSec: 2 },
+    data: { patientId, idempotencyKey: `seed-${Date.now()}-${Math.random().toString(36).slice(2)}-xxxx`, consentConfirmed: true, identityChecks: ["name", "dob"], mimeType: "video/webm", sizeBytes: video.length, durationSec: 2 },
     headers: json,
   });
   expect(init.status()).toBe(200);

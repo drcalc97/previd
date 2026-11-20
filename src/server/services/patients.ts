@@ -1,5 +1,4 @@
 import "server-only";
-import { patientInput, type PatientInput } from "@/domain/schemas";
 import { audit } from "../audit";
 import { requirePermission, NotFoundError } from "../authz";
 import { withOrg, type OrgContext } from "../db";
@@ -31,7 +30,7 @@ const map = (r: Row): Patient => ({
 
 const escapeLike = (s: string) => s.replace(/[\\%_]/g, (c) => `\\${c}`);
 
-export async function listPatients(ctx: OrgContext, q = "", includeArchived = false): Promise<Patient[]> {
+export async function listPatients(ctx: OrgContext, q = ""): Promise<Patient[]> {
   await requirePermission(ctx, "patient:read");
   const term = `%${escapeLike(q.trim().slice(0, 60))}%`;
   const rows = await withOrg(ctx, async (tx) => {
@@ -39,7 +38,8 @@ export async function listPatients(ctx: OrgContext, q = "", includeArchived = fa
                       max(r.recorded_at) filter (where r.status = 'available') as latest_recording_at
                from patients p left join recordings r on r.patient_id = p.id and r.org_id = p.org_id
                where p.org_id = ${ctx.orgId}
-                 and (${includeArchived} or p.archived_at is null)
+                 and p.archived_at is null
+                 and exists (select 1 from recordings rx where rx.org_id = p.org_id and rx.patient_id = p.id and rx.status = 'available')
                  and (${q.trim() === ""} or p.family_name ilike ${term} or p.given_name ilike ${term}
                       or p.synthetic_ref ilike ${term} or p.nhs_number ilike ${term})
                group by p.id order by p.family_name, p.given_name limit 100`;
@@ -54,34 +54,13 @@ export async function listPatients(ctx: OrgContext, q = "", includeArchived = fa
 export async function getPatient(ctx: OrgContext, id: string, opts: { auditView?: boolean } = {}): Promise<Patient> {
   await requirePermission(ctx, "patient:read");
   return withOrg(ctx, async (tx) => {
-    const [r] = await tx`select * from patients where id = ${id} and org_id = ${ctx.orgId}`;
+    // A patient is only visible while they have a live PreVid recording (no recording => no identity held; ADR-017).
+    const [r] = await tx`select * from patients p where p.id = ${id} and p.org_id = ${ctx.orgId} and p.archived_at is null
+                         and exists (select 1 from recordings rx where rx.org_id = p.org_id and rx.patient_id = p.id and rx.status in ('available','pending_upload'))`;
     if (!r) throw new NotFoundError();
     if (opts.auditView !== false) {
       await audit(tx, { orgId: ctx.orgId, actorUserId: ctx.userId, action: "patient.view", targetType: "patient", targetId: id, ipHash: ctx.ipHash });
     }
     return map(r);
-  });
-}
-
-export async function createPatient(ctx: OrgContext, input: PatientInput): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
-  await requirePermission(ctx, "patient:write");
-  const v = patientInput.parse(input);
-  return withOrg(ctx, async (tx) => {
-    const dup = await tx`select 1 from patients where org_id = ${ctx.orgId} and synthetic_ref = ${v.syntheticRef}`;
-    if (dup.length) return { ok: false as const, error: "A patient with that reference already exists." };
-    const [r] = await tx`insert into patients(org_id, synthetic_ref, given_name, family_name, date_of_birth, nhs_number, created_by)
-      values (${ctx.orgId}, ${v.syntheticRef}, ${v.givenName}, ${v.familyName}, ${v.dateOfBirth}, ${v.nhsNumber || null}, ${ctx.userId})
-      returning id`;
-    await audit(tx, { orgId: ctx.orgId, actorUserId: ctx.userId, action: "patient.create", targetType: "patient", targetId: r.id, ipHash: ctx.ipHash });
-    return { ok: true as const, id: r.id as string };
-  });
-}
-
-export async function archivePatient(ctx: OrgContext, id: string): Promise<void> {
-  await requirePermission(ctx, "patient:write");
-  await withOrg(ctx, async (tx) => {
-    const r = await tx`update patients set archived_at = now() where id = ${id} and org_id = ${ctx.orgId} and archived_at is null returning id`;
-    if (!r.length) throw new NotFoundError();
-    await audit(tx, { orgId: ctx.orgId, actorUserId: ctx.userId, action: "patient.archive", targetType: "patient", targetId: id, ipHash: ctx.ipHash });
   });
 }

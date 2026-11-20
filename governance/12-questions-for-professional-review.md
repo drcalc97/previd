@@ -43,6 +43,8 @@ Abbreviations: CSO clinical safety officer; IG information governance; DPO data 
 2. DPO and IG questions (6–15) alongside a pilot Trust.
 3. Security and legal questions before contracts.
 
-## Added 2026-11-20 — consent and identity minimisation (owner decision, ADR-016)
+## Added 2026-11-20 — consent and identity minimisation (owner decisions, ADR-016 and ADR-017)
 **[External review] [NHS approval]** The owner's position: PreVid should not store even the name of a patient who has not consented to being recorded.
 Currently patient records can be created before any recording (and are listed to all clinicians in the organisation). Questions for the IG lead / DPO / Trust: (1) At what point should consent be captured and evidenced (before the patient record exists)? (2) Should a patient record exist at all without a recording? (3) When the last recording of a patient is deleted or purged, should the identity row be deleted, anonymised or retained? (4) Is the patient list (names/DOB/NHS number) acceptable to show to all clinicians in the organisation, or should it be restricted? (5) Is consent withdrawal handled by deletion of recordings and identity? Answers affect the DPIA, hazard log (H13 consent) and the data model.
+
+**Update (owner decision, ADR-017):** consent is confirmed as part of every recording and the patient is created only at that moment (nothing is stored if the clinician cancels); a patient's identity is scrubbed when their last recording is deleted/purged; MDT lists use identity-free "No PreVid for patient N" placeholders. Still needing professional review: the consent wording shown to clinicians (draft), how consent evidence/withdrawal is recorded and honoured, whether clinicians other than the recorder may see the patient list, and whether the interim identity held in the clinician's browser before upload is acceptable.

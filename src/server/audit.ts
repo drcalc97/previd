@@ -24,6 +24,8 @@ export type AuditAction =
   | "mdt.create"
   | "mdt.patient_add"
   | "mdt.patient_remove"
+  | "mdt.placeholder_add"
+  | "mdt.placeholder_remove"
   | "admin.user_add"
   | "admin.role_change"
   | "admin.user_suspend"

@@ -21,7 +21,7 @@ async function as<T>(email: string | null, org: string | null, fn: (tx: Tx) => P
 }
 
 const denied = async (p: Promise<unknown>) => {
-  await expect(p).rejects.toThrow(/row-level security|permission denied|violates/i);
+  await expect(p).rejects.toThrow(/row-level security|permission denied|violates|not permitted/i);
 };
 
 beforeAll(async () => {
@@ -47,7 +47,7 @@ describe("cross-tenant reads", () => {
   it("a Northfield clinician sees only Northfield patients", async () => {
     const rows = await as("clinician@northfield.demo", "northfield", (tx) => tx`select org_id from patients`);
     const [{ n }] = await admin`select count(*)::int as n from patients where org_id = ${ids["org:northfield"]}`;
-    expect(n).toBeGreaterThanOrEqual(8);
+    expect(n).toBeGreaterThanOrEqual(3);
     expect(rows.length).toBe(n); // sees exactly its own organisation's patients, no more
     expect(new Set(rows.map((r) => r.org_id))).toEqual(new Set([ids["org:northfield"]]));
   });
@@ -108,8 +108,8 @@ describe("cross-tenant writes", () => {
   it("database rejects a recording that points at another organisation's patient (composite FK)", async () => {
     const [victim] = await admin`select id from patients where org_id = ${ids["org:riverside"]} limit 1`;
     await expect(
-      admin`insert into recordings(org_id, patient_id, recorded_by, identity_verified_at, identity_checks, storage_key, idempotency_key)
-            values (${ids["org:northfield"]}, ${victim.id}, ${ids["clinician@northfield.demo"]}, now(), ${["name", "dob"]}, 'k-cross', 'idem-key-cross-0001')`,
+      admin`insert into recordings(org_id, patient_id, recorded_by, identity_verified_at, identity_checks, consent_confirmed_at, consent_confirmed_by, storage_key, idempotency_key)
+            values (${ids["org:northfield"]}, ${victim.id}, ${ids["clinician@northfield.demo"]}, now(), ${["name", "dob"]}, now(), ${ids["clinician@northfield.demo"]}, 'k-cross', 'idem-key-cross-0001')`,
     ).rejects.toThrow(/foreign key/i);
   });
 });
@@ -127,8 +127,8 @@ describe("role enforcement in the database (defence in depth)", () => {
     const [p] = await admin`select id from patients where org_id = ${ids["org:northfield"]} limit 1`;
     await denied(
       as("reviewer@northfield.demo", "northfield", (tx) =>
-        tx`insert into recordings(org_id, patient_id, recorded_by, identity_verified_at, identity_checks, storage_key, idempotency_key)
-           values (${ids["org:northfield"]}, ${p.id}, ${ids["reviewer@northfield.demo"]}, now(), ${["name", "dob"]}, 'k-rv', 'idem-key-reviewer-01')`),
+        tx`insert into recordings(org_id, patient_id, recorded_by, identity_verified_at, identity_checks, consent_confirmed_at, consent_confirmed_by, storage_key, idempotency_key)
+           values (${ids["org:northfield"]}, ${p.id}, ${ids["reviewer@northfield.demo"]}, now(), ${["name", "dob"]}, now(), ${ids["clinician@northfield.demo"]}, 'k-rv', 'idem-key-reviewer-01')`),
     );
   });
 
@@ -144,8 +144,8 @@ describe("role enforcement in the database (defence in depth)", () => {
     const [p] = await admin`select id from patients where org_id = ${ids["org:northfield"]} limit 1`;
     await denied(
       as("clinician@northfield.demo", "northfield", (tx) =>
-        tx`insert into recordings(org_id, patient_id, recorded_by, identity_verified_at, identity_checks, storage_key, idempotency_key)
-           values (${ids["org:northfield"]}, ${p.id}, ${ids["admin@northfield.demo"]}, now(), ${["name", "dob"]}, 'k-imp', 'idem-key-impersonate1')`),
+        tx`insert into recordings(org_id, patient_id, recorded_by, identity_verified_at, identity_checks, consent_confirmed_at, consent_confirmed_by, storage_key, idempotency_key)
+           values (${ids["org:northfield"]}, ${p.id}, ${ids["admin@northfield.demo"]}, now(), ${["name", "dob"]}, now(), ${ids["clinician@northfield.demo"]}, 'k-imp', 'idem-key-impersonate1')`),
     );
   });
 
@@ -153,8 +153,8 @@ describe("role enforcement in the database (defence in depth)", () => {
     const [p] = await admin`select id from patients where org_id = ${ids["org:northfield"]} limit 1`;
     await denied(
       as("clinician@northfield.demo", "northfield", (tx) =>
-        tx`insert into recordings(org_id, patient_id, recorded_by, identity_verified_at, identity_checks, storage_key, idempotency_key)
-           values (${ids["org:northfield"]}, ${p.id}, ${ids["clinician@northfield.demo"]}, now(), ${["name"]}, 'k-one', 'idem-key-onefactor01')`),
+        tx`insert into recordings(org_id, patient_id, recorded_by, identity_verified_at, identity_checks, consent_confirmed_at, consent_confirmed_by, storage_key, idempotency_key)
+           values (${ids["org:northfield"]}, ${p.id}, ${ids["clinician@northfield.demo"]}, now(), ${["name"]}, now(), ${ids["clinician@northfield.demo"]}, 'k-one', 'idem-key-onefactor01')`),
     );
   });
 
@@ -194,8 +194,8 @@ describe("audit log", () => {
 describe("system functions and misc grants", () => {
   it("system_mark_object_deleted refuses rows that are not due", async () => {
     const [p] = await admin`select id from patients where org_id = ${ids["org:northfield"]} limit 1`;
-    const [rec] = await admin`insert into recordings(org_id, patient_id, recorded_by, identity_verified_at, identity_checks, storage_key, idempotency_key, status, purge_after)
-      values (${ids["org:northfield"]}, ${p.id}, ${ids["clinician@northfield.demo"]}, now(), ${["name", "dob"]}, 'k-live', 'idem-key-live-000001', 'available', now() + interval '30 days') returning id`;
+    const [rec] = await admin`insert into recordings(org_id, patient_id, recorded_by, identity_verified_at, identity_checks, consent_confirmed_at, consent_confirmed_by, storage_key, idempotency_key, status, purge_after)
+      values (${ids["org:northfield"]}, ${p.id}, ${ids["clinician@northfield.demo"]}, now(), ${["name", "dob"]}, now(), ${ids["clinician@northfield.demo"]}, 'k-live', 'idem-key-live-000001', 'available', now() + interval '30 days') returning id`;
     const [r] = await as(null, null, (tx) => tx`select system_mark_object_deleted(${rec.id}) as ok`);
     expect(r.ok).toBe(false);
     const [still] = await admin`select status from recordings where id = ${rec.id}`;
@@ -244,8 +244,8 @@ describe("security hardening regressions (docs/security/FINDINGS_REGISTER.md)", 
 
   it("SEC-014: immutable recording columns are frozen (even for the owner)", async () => {
     const [p] = await admin`select id from patients where org_id = ${ids["org:northfield"]} limit 1`;
-    const [rec] = await admin`insert into recordings(org_id, patient_id, recorded_by, identity_verified_at, identity_checks, storage_key, idempotency_key)
-      values (${ids["org:northfield"]}, ${p.id}, ${ids["clinician@northfield.demo"]}, now(), ${["name", "dob"]}, 'k-freeze', 'idem-key-freeze-0001') returning id`;
+    const [rec] = await admin`insert into recordings(org_id, patient_id, recorded_by, identity_verified_at, identity_checks, consent_confirmed_at, consent_confirmed_by, storage_key, idempotency_key)
+      values (${ids["org:northfield"]}, ${p.id}, ${ids["clinician@northfield.demo"]}, now(), ${["name", "dob"]}, now(), ${ids["clinician@northfield.demo"]}, 'k-freeze', 'idem-key-freeze-0001') returning id`;
     await expect(admin`update recordings set storage_key = 'k-other' where id = ${rec.id}`).rejects.toThrow(/immutable/);
     await expect(admin`update recordings set recorded_by = ${ids["admin@northfield.demo"]} where id = ${rec.id}`).rejects.toThrow(/immutable/);
     await admin`delete from recordings where id = ${rec.id}`;
@@ -254,8 +254,8 @@ describe("security hardening regressions (docs/security/FINDINGS_REGISTER.md)", 
   it("SEC-003/004: uploads are only allowed while a recording is pending", async () => {
     const [p] = await admin`select id from patients where org_id = ${ids["org:northfield"]} limit 1`;
     const mk = async (key: string, status: string) =>
-      (await admin`insert into recordings(org_id, patient_id, recorded_by, identity_verified_at, identity_checks, storage_key, idempotency_key, status)
-        values (${ids["org:northfield"]}, ${p.id}, ${ids["clinician@northfield.demo"]}, now(), ${["name", "dob"]}, ${key}, ${"idem-" + key + "-padpadpad"}, ${status}) returning id`)[0].id;
+      (await admin`insert into recordings(org_id, patient_id, recorded_by, identity_verified_at, identity_checks, consent_confirmed_at, consent_confirmed_by, storage_key, idempotency_key, status)
+        values (${ids["org:northfield"]}, ${p.id}, ${ids["clinician@northfield.demo"]}, now(), ${["name", "dob"]}, now(), ${ids["clinician@northfield.demo"]}, ${key}, ${"idem-" + key + "-padpadpad"}, ${status}) returning id`)[0].id;
     const a = await mk("k-pend", "pending_upload"), b = await mk("k-avail", "available"), c = await mk("k-del", "deleted");
     const check = async (k: string) => (await as(null, null, (tx) => tx`select system_upload_allowed(${k}) as ok`))[0].ok;
     expect(await check("k-pend")).toBe(true);
@@ -273,5 +273,76 @@ describe("security hardening regressions (docs/security/FINDINGS_REGISTER.md)", 
     // and a non-admin gets nothing at all
     const asClin = (await as("clinician@northfield.demo", "northfield", (tx) => tx`select app_find_user_id_by_email('clinician@riverside.demo') as id`))[0].id;
     expect(asClin).toBeNull();
+  });
+});
+
+describe("consent and identity minimisation (ADR-017)", () => {
+  const newPatient = async (ref: string) =>
+    (await admin`insert into patients(org_id, synthetic_ref, given_name, family_name, date_of_birth, nhs_number)
+                 values (${ids["org:northfield"]}, ${ref + "-" + Math.random().toString(36).slice(2, 7)}, 'Temp', 'Person', '1970-01-01', '9990000999') returning id`)[0].id as string;
+  const newRec = async (patientId: string, key: string, status: string) =>
+    (await admin`insert into recordings(org_id, patient_id, recorded_by, identity_verified_at, identity_checks, consent_confirmed_at, consent_confirmed_by, storage_key, idempotency_key, status)
+                 values (${ids["org:northfield"]}, ${patientId}, ${ids["clinician@northfield.demo"]}, now(), ${["name", "dob"]}, now(), ${ids["clinician@northfield.demo"]}, ${key}, ${"idem-" + key + "-padpadpad"}, ${status}) returning id`)[0].id as string;
+
+  it("a recording cannot exist without a consent confirmation", async () => {
+    const pid = await newPatient("SCRUB-NOCONSENT");
+    await expect(
+      admin`insert into recordings(org_id, patient_id, recorded_by, identity_verified_at, identity_checks, storage_key, idempotency_key)
+            values (${ids["org:northfield"]}, ${pid}, ${ids["clinician@northfield.demo"]}, now(), ${["name", "dob"]}, 'k-noconsent', 'idem-key-noconsent-001')`,
+    ).rejects.toThrow(/consent_confirmed/);
+    await admin`delete from patients where id = ${pid}`;
+  });
+
+  it("consent columns are immutable", async () => {
+    const pid = await newPatient("SCRUB-IMMUT");
+    const rid = await newRec(pid, "k-immut", "available");
+    await expect(admin`update recordings set consent_confirmed_at = now() - interval '1 day' where id = ${rid}`).rejects.toThrow(/immutable/);
+    await admin`delete from recordings where id = ${rid}`;
+    await admin`delete from patients where id = ${pid}`;
+  });
+
+  it("a patient's identity is scrubbed once no live recording remains; not while one does", async () => {
+    const pid = await newPatient("SCRUB-ME");
+    const rid = await newRec(pid, "k-scrub", "available");
+    const scrub = () => as("clinician@northfield.demo", "northfield", (tx) => tx`select patient_scrub_if_unused(${ids["org:northfield"]}, ${pid})`);
+    await scrub();
+    expect((await admin`select given_name from patients where id = ${pid}`)[0].given_name).toBe("Temp"); // still has a live recording
+    await admin`update recordings set status = 'deleted', deleted_at = now(), delete_reason = 'wrong_patient' where id = ${rid}`;
+    await scrub();
+    const [p] = await admin`select given_name, family_name, date_of_birth::text as dob, nhs_number, synthetic_ref, archived_at from patients where id = ${pid}`;
+    expect(p.given_name).toBe("Removed");
+    expect(p.family_name).toBe("Removed");
+    expect(p.dob).toBe("1900-01-01");
+    expect(p.nhs_number).toBeNull();
+    expect(p.synthetic_ref).toMatch(/^REMOVED-/);
+    expect(p.archived_at).not.toBeNull();
+    await admin`delete from recordings where id = ${rid}`;
+    await admin`delete from patients where id = ${pid}`;
+  });
+
+  it("scrub is refused for other organisations and for read-only roles", async () => {
+    const pid = await newPatient("SCRUB-DENY");
+    await denied(as("clinician@riverside.demo", "riverside", (tx) => tx`select patient_scrub_if_unused(${ids["org:northfield"]}, ${pid})`));
+    await denied(as("reviewer@northfield.demo", "northfield", (tx) => tx`select patient_scrub_if_unused(${ids["org:northfield"]}, ${pid})`));
+    expect((await admin`select given_name from patients where id = ${pid}`)[0].given_name).toBe("Temp");
+    await admin`delete from patients where id = ${pid}`;
+  });
+
+  it("the internal scrub function is not callable by the app role", async () => {
+    await denied(as("clinician@northfield.demo", "northfield", (tx) => tx`select patient_scrub_internal(${ids["org:northfield"]}, gen_random_uuid())`));
+  });
+
+  it("MDT placeholders: clinicians add, reviewers cannot, other organisations cannot see them; they hold no identity", async () => {
+    const [m] = await admin`select id from mdt_meetings where org_id = ${ids["org:northfield"]} limit 1`;
+    const ins = (u: string, org: string) => as(u, org, (tx) =>
+      tx`insert into mdt_meeting_placeholders(org_id, meeting_id, position) values (${ids["org:" + org]}, ${m.id}, 7) returning id`);
+    const [ph] = await ins("clinician@northfield.demo", "northfield");
+    await denied(ins("reviewer@northfield.demo", "northfield"));
+    await denied(ins("clinician@riverside.demo", "riverside")); // cross-tenant meeting: composite FK / RLS
+    expect((await as("clinician@riverside.demo", "riverside", (tx) => tx`select 1 from mdt_meeting_placeholders`)).length).toBe(0);
+    expect((await as("reviewer@northfield.demo", "northfield", (tx) => tx`select 1 from mdt_meeting_placeholders where id = ${ph.id}`)).length).toBe(1);
+    const cols = await admin`select column_name from information_schema.columns where table_name = 'mdt_meeting_placeholders'`;
+    expect(cols.map((c) => c.column_name).sort()).toEqual(["added_at", "id", "meeting_id", "org_id", "position"]); // no patient identifiers possible
+    await admin`delete from mdt_meeting_placeholders where id = ${ph.id}`;
   });
 });

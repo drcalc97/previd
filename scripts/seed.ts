@@ -64,9 +64,8 @@ export async function seed(sql: Sql) {
       if (!existing.length) {
         const [m] = await tx`insert into mdt_meetings(org_id, title, scheduled_for, created_by)
           values (${orgIds[o.slug]}, 'Pre-op MDT (synthetic)', now() + interval '2 days', ${creator}) returning id`;
-        for (const [pos, pid] of patientIds.slice(0, 4).entries()) {
-          await tx`insert into mdt_meeting_patients(org_id, meeting_id, patient_id, position) values (${orgIds[o.slug]}, ${m.id}, ${pid}, ${pos})`;
-        }
+        // Patients are only added to an MDT list once they have a recording (ADR-016); the list starts empty.
+        void patientIds;
       }
     }
   });

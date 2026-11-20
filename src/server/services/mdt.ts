@@ -13,9 +13,12 @@ export async function listMeetings(ctx: OrgContext): Promise<Meeting[]> {
   await requirePermission(ctx, "mdt:read");
   const rows = await withOrg(
     ctx,
-    (tx) => tx`select m.id, m.title, m.scheduled_for, count(mp.patient_id) as n from mdt_meetings m
-               left join mdt_meeting_patients mp on mp.meeting_id = m.id
-               where m.org_id = ${ctx.orgId} group by m.id order by m.scheduled_for desc limit 100`,
+    // Only patients who currently have at least one available recording count (see ADR-016).
+    (tx) => tx`select m.id, m.title, m.scheduled_for,
+                 (select count(*) from mdt_meeting_patients mp
+                   where mp.meeting_id = m.id and mp.org_id = m.org_id
+                     and exists (select 1 from recordings r where r.org_id = mp.org_id and r.patient_id = mp.patient_id and r.status = 'available')) as n
+               from mdt_meetings m where m.org_id = ${ctx.orgId} order by m.scheduled_for desc limit 100`,
   );
   return rows.map((r: Row) => ({ id: r.id, title: r.title, scheduledFor: iso(r.scheduled_for)!, patientCount: Number(r.n) }));
 }
@@ -38,7 +41,9 @@ export async function getMeeting(ctx: OrgContext, id: string) {
     if (!m) throw new NotFoundError();
     const pats = await tx`select p.id, p.given_name, p.family_name, p.synthetic_ref, p.date_of_birth, p.nhs_number
                           from mdt_meeting_patients mp join patients p on p.id = mp.patient_id and p.org_id = mp.org_id
-                          where mp.meeting_id = ${id} and mp.org_id = ${ctx.orgId} order by mp.position, p.family_name`;
+                          where mp.meeting_id = ${id} and mp.org_id = ${ctx.orgId}
+                            and exists (select 1 from recordings r where r.org_id = mp.org_id and r.patient_id = mp.patient_id and r.status = 'available')
+                          order by mp.position, p.family_name`;
     const ids = pats.map((p: Row) => p.id as string);
     const recs = ids.length
       ? await tx`select r.id, r.patient_id, r.recorded_at, r.duration_sec, u.display_name from recordings r
@@ -77,7 +82,9 @@ export async function addPatientToMeeting(ctx: OrgContext, meetingId: string, pa
   await requirePermission(ctx, "mdt:write");
   await withOrg(ctx, async (tx) => {
     const [m] = await tx`select 1 as x from mdt_meetings where id = ${meetingId} and org_id = ${ctx.orgId}`;
-    const [p] = await tx`select 1 as x from patients where id = ${patientId} and org_id = ${ctx.orgId} and archived_at is null`;
+    // Only patients with a PreVid recording may appear in an MDT list: we hold no basis to show others (ADR-016).
+    const [p] = await tx`select 1 as x from patients p where p.id = ${patientId} and p.org_id = ${ctx.orgId} and p.archived_at is null
+                         and exists (select 1 from recordings r where r.org_id = p.org_id and r.patient_id = p.id and r.status = 'available')`;
     if (!m || !p) throw new NotFoundError();
     await tx`insert into mdt_meeting_patients(org_id, meeting_id, patient_id, position)
              select ${ctx.orgId}, ${meetingId}, ${patientId}, coalesce(max(position), -1) + 1 from mdt_meeting_patients where meeting_id = ${meetingId}

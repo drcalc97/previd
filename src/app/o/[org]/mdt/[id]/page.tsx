@@ -27,7 +27,8 @@ export default async function MeetingPage({
   const selected = m.patients.find((p) => p.patientId === sp.p) ?? m.patients[0];
   const rec = selected?.recordings.find((r) => r.id === sp.r) ?? selected?.recordings[0];
   const canEdit = can(ctx.role, "mdt:write");
-  const addable = canEdit ? (await listPatients(ctx)).filter((p) => !m.patients.some((x) => x.patientId === p.id)) : [];
+  // Only patients who have at least one PreVid recording can be added (ADR-016).
+  const addable = canEdit ? (await listPatients(ctx)).filter((p) => (p.recordingCount ?? 0) > 0 && !m.patients.some((x) => x.patientId === p.id)) : [];
 
   return (
     <>
@@ -35,7 +36,7 @@ export default async function MeetingPage({
       <div className="grid gap-4 lg:grid-cols-[18rem_1fr]">
         <nav aria-label="Patients in this meeting" className="flex flex-col gap-3">
           <Card className="p-2 sm:p-2">
-            {m.patients.length === 0 ? <p className="p-2 text-muted">No patients added yet.</p> : (
+            {m.patients.length === 0 ? <p className="p-2 text-muted">No patients with recordings have been added yet.</p> : (
               <ul className="flex flex-col">
                 {m.patients.map((p) => {
                   const active = p.patientId === selected?.patientId;
@@ -46,7 +47,7 @@ export default async function MeetingPage({
                         className={`block rounded-lg px-3 py-2 ${active ? "bg-primary text-primary-fg" : "hover:bg-slate-100"}`}>
                         <span className="block font-medium">{p.familyName.toUpperCase()}, {p.givenName}</span>
                         <span className={`block text-sm ${active ? "text-white/90" : "text-muted"}`}>
-                          {latest ? `Latest video ${formatDate(latest.recordedAt)} · ${p.recordings.length} total` : "No recordings"}
+                          Latest video {formatDate(latest.recordedAt)} · {p.recordings.length} total
                         </span>
                       </Link>
                     </li>
@@ -70,7 +71,7 @@ export default async function MeetingPage({
         </nav>
 
         <section aria-label="Recording review" className="min-w-0">
-          {!selected ? <Alert>Add patients to this meeting to review their recordings.</Alert> : (
+          {!selected ? <Alert>No recordings to review yet. Patients appear here once they have a PreVid recording and are added to the meeting.</Alert> : (
             <>
               <PatientBanner p={{ givenName: selected.givenName, familyName: selected.familyName, dateOfBirth: selected.dateOfBirth, nhsNumber: selected.nhsNumber, syntheticRef: selected.syntheticRef }} />
               {selected.recordings.length === 0 ? <Alert tone="info">No recordings for this patient.</Alert> : (

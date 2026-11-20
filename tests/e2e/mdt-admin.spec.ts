@@ -4,12 +4,15 @@ import { admin, alerts, createRecordingViaApi, ids, login } from "./helpers";
 test.describe("MDT viewer", () => {
   test("reviewer can find and open recordings with dates; cannot edit the meeting @mobile", async ({ page, browser }) => {
     // A clinician records for a patient that is on the seeded MDT list.
-    const sql = admin();
-    const [m] = await sql`select m.id, mp.patient_id from mdt_meetings m join mdt_meeting_patients mp on mp.meeting_id = m.id join organisations o on o.id = m.org_id where o.slug = 'northfield' order by mp.position limit 1`;
-    await sql.end();
+    const { pats } = await ids();
+    const target = pats.find((x) => x.slug === "northfield")!;
     const clin = await (await browser.newContext()).newPage();
     await login(clin, "clinician@northfield.demo");
-    const recId = await createRecordingViaApi(clin, "northfield", m.patient_id);
+    const recId = await createRecordingViaApi(clin, "northfield", target.id);
+    const sql = admin();
+    const [m] = await sql`select m.id, m.org_id, ${target.id}::uuid as patient_id from mdt_meetings m join organisations o on o.id = m.org_id where o.slug = 'northfield' and m.title like 'Pre-op%' limit 1`;
+    await sql`insert into mdt_meeting_patients(org_id, meeting_id, patient_id, position) values (${m.org_id}, ${m.id}, ${target.id}, 0) on conflict do nothing`;
+    await sql.end();
 
     await login(page, "reviewer@northfield.demo");
     await page.goto("/o/northfield/mdt");
@@ -43,9 +46,24 @@ test.describe("MDT viewer", () => {
     await page.getByLabel("Date and time").fill("2030-01-15T09:00");
     await page.getByRole("button", { name: "Create meeting" }).click();
     await expect(page.getByRole("heading", { name: "E2E MDT" })).toBeVisible();
-    await page.getByLabel("Add patient").selectOption({ index: 1 });
+    // Only patients WITH a recording may be added (no consent basis to show others).
+    const { pats } = await ids();
+    const nor = pats.filter((x) => x.slug === "northfield");
+    const withVideo = nor[0], withoutVideo = nor[nor.length - 1];
+    await createRecordingViaApi(page, "northfield", withVideo.id);
+    await page.reload();
+    const options = await page.getByLabel("Add patient").locator("option").allInnerTexts();
+    expect(options.some((o) => o.includes(withVideo.family_name.toUpperCase()))).toBe(true);
+    const sql = admin();
+    const [ref] = await sql`select synthetic_ref from patients where id = ${withoutVideo.id}`;
+    const [noVid] = await sql`select count(*)::int as n from recordings where patient_id = ${withoutVideo.id} and status = 'available'`;
+    await sql.end();
+    expect(noVid.n).toBe(0);
+    expect(options.join("|")).not.toContain(ref.synthetic_ref);
+    await page.getByLabel("Add patient").selectOption({ label: options.find((o) => o.includes(withVideo.family_name.toUpperCase()))! });
     await page.getByRole("button", { name: "Add", exact: true }).click();
     await expect(page.getByTestId("patient-banner")).toBeVisible();
+    await expect(page.getByTestId("player")).toBeVisible();
   });
 });
 
@@ -162,6 +180,38 @@ test.describe("administration", () => {
 });
 
 test.describe("retention and deletion", () => {
+  test("an organisation admin can delete a clinician's recording", async ({ page, browser }) => {
+    const { pats } = await ids();
+    const p = pats.find((x) => x.slug === "northfield")!;
+    const clin = await (await browser.newContext()).newPage();
+    await login(clin, "clinician@northfield.demo");
+    const id = await createRecordingViaApi(clin, "northfield", p.id);
+    await login(page, "admin@northfield.demo");
+    await page.goto(`/o/northfield/recordings/${id}`);
+    await page.getByLabel("Delete this recording").selectOption("admin_request");
+    await page.getByRole("button", { name: "Delete", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Recording timeline" })).toBeVisible();
+    const s = admin();
+    const [r] = await s`select status, delete_reason, deleted_by from recordings where id = ${id}`;
+    const [a] = await s`select u.email from users u where u.id = ${r.deleted_by}`;
+    await s.end();
+    expect(r.status).toBe("deleted");
+    expect(r.delete_reason).toBe("admin_request");
+    expect(a.email).toBe("admin@northfield.demo");
+  });
+
+  test("a reviewer cannot delete recordings", async ({ page }) => {
+    const { pats } = await ids();
+    const p = pats.find((x) => x.slug === "northfield")!;
+    await login(page, "clinician@northfield.demo");
+    const id = await createRecordingViaApi(page, "northfield", p.id);
+    const rev = await page.context().browser()!.newContext();
+    const rp = await rev.newPage();
+    await login(rp, "reviewer@northfield.demo");
+    await rp.goto(`/o/northfield/recordings/${id}`);
+    await expect(rp.getByLabel("Delete this recording")).toHaveCount(0);
+  });
+
   test("clinician can delete own recording with a reason; stored object is removed", async ({ page }) => {
     const { pats } = await ids();
     const p = pats.find((x) => x.slug === "northfield")!;

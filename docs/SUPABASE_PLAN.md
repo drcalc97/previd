@@ -85,3 +85,17 @@ Projects pause after a period of inactivity; small DB and storage quotas; no poi
 
 ## 8. Order I will work in
 A (verify/create) → C (DB + RLS suite on Supabase) → B (settings) → E (identity) → F (invitations) → D (storage) → H (config) → G (tests, security re-review) → report with test results, findings, costs and decisions.
+
+---
+
+## Progress log
+
+**2026-11-21 — Step A/C partly done (owner approved applying migrations and the network change).**
+- Connector live. Organisation "PreVid" (free plan). Existing empty project **"drcalc97's Project"** (`eemlpjwqzyneaoavrnou`, `eu-west-2` London, Postgres 17) is used as the dev project. No second project created.
+- Migrations **0001–0005 applied** through the connector (`apply_migration`; applied text omits SQL comments but is otherwise identical to `db/migrations/`). `0004_supabase_platform_hardening.sql` revokes the Data API roles (`anon`, `authenticated`) from every table/sequence/function in `public` and puts RLS on `identity_links` and `rate_limits`; `0005` pins function search paths.
+- **Verified in the database** (a rolled-back test run via the connector, as the real roles): app role sees only its own organisation's rows, nothing with no/other org context; app role cannot create temp tables or objects in `public` (so the TEMP/CREATE revokes worked on Supabase, closing the SEC-011 "verify manually" item for this project); `anon` and `authenticated` cannot read any PreVid table or execute any PreVid function; app role is not superuser/BYPASSRLS. This ran SQL on the project but is **not** the full `tests/db` suite.
+- Advisor still lists `public.rls_auto_enable()` (platform-provided event-trigger helper owned by a platform role) as executable by `anon`/`authenticated`; our migrations cannot revoke it. Left unchanged; consider disabling the Data API (project settings) or reporting to Supabase. Re-run advisors after every schema change.
+- `grant previd_app to postgres with set true` was run so the connector's role can run the checks above; remove it (`revoke previd_app from postgres`) before any real use.
+- `previd_app` is still `NOLOGIN` (no password set). The password will be set when a place to run the app exists.
+- **Network:** a personal environment `previd` was created for this repo allowing the project API host, direct DB host and EU-west-2 pooler hosts. **Finding:** the sandbox's proxy only carries HTTPS; **raw-TCP Postgres connections are not supported**, so the app and the `tests/db` / Playwright suites **cannot connect to the Supabase database from this sandbox.** HTTPS APIs (Auth, Storage, REST) and the connector's SQL tool do work. Consequences: (1) Auth/Storage adapters can be contract-tested here over HTTPS once a key is provided (via the secure credential form, injected by the proxy — I never see it); (2) the full app against Supabase must run somewhere with Postgres network access: a Vercel preview (needs your approval), or your own machine; (3) DB-level checks can continue via the connector.
+- Still to do: free-plan upload size limit (owner to read from the dashboard), email provider decision, Auth settings (disable sign-ups, TOTP, password length), private `videos` bucket, adapters (Steps D–F), `previd_app` password, CSP hosts.

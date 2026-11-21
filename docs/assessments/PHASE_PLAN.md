@@ -1,6 +1,6 @@
 # Physical Performance Assessment module — phased plan (FOR APPROVAL)
 
-Status: **PLAN. No module code has been written.** Companion documents: `VIDEO_TIMING.md` (design + feasibility spike), `PROTOCOLS.md` / `SCORING.md` / `REFERENCES.md` (Agent 1, compiled from retrieved sources, **requires clinician review**), `CLINICAL_SAFETY.md` + `SECURITY_REVIEW_PLAN.md` + `governance/13-…` (Agent 5, draft).
+Status: **PLAN. No module code has been written.** Companion documents: `VIDEO_TIMING.md` (design + feasibility spike), `PROTOCOLS.md` / `SCORING.md` / `REFERENCES.md` (Agent 1; compiled from web-search summaries only — **primary sources could not be fetched (network blocked), so nothing is verified against primary text**; requires clinician verification), `CLINICAL_SAFETY.md` + `SECURITY_REVIEW_PLAN.md` + `governance/13-…` (Agent 5, draft).
 This is not clinical validation, not a regulatory assessment, and PreVid will not interpret results (no frailty/risk categories, no AI).
 
 ## 1. What exists today (inspected)
@@ -10,7 +10,7 @@ Next.js 16 App Router modular monolith; Postgres with RLS driven by per-transact
 ## 2. Team and file ownership (specialist subagents; orchestrator integrates and merges)
 | Agent | Owns (exclusive write) | Notes |
 |---|---|---|
-| 1 Clinical Assessment & Protocol | `docs/assessments/PROTOCOLS.md`, `SCORING.md`, `REFERENCES.md` | Done as research draft (cited); clinician sign-off outstanding |
+| 1 Clinical Assessment & Protocol | `docs/assessments/PROTOCOLS.md`, `SCORING.md`, `REFERENCES.md` | Research draft only, **UNVERIFIED against primary sources**; clinician verification outstanding; DASI licensing unresolved |
 | 2 Frontend/UX | `src/app/o/[org]/patients/[id]/assessments/**`, `src/components/assessments/**` | Hub, wizards, results, timeline |
 | 3 Video Processing | `src/lib/timing/**`, `src/components/timing/**`, `tests/fixtures/video/**` | Pure libs + TimingEditor |
 | 4 Backend/DB | `db/migrations/0004+…`, `src/server/services/assessments/**`, `src/domain/assessments/**`, API routes | Scoring is pure code in `src/domain` |

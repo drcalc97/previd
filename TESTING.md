@@ -15,6 +15,8 @@ npm run build && npm run e2e # global setup re-seeds the test DB and starts `nex
 ```
 `.env.test` is git-ignored; CI writes it from workflow variables.
 
+| Integration (real Supabase Auth) | Vitest, gated by env | `tests/integration` | Supabase identity adapter against the dev project over HTTPS (needs `NODE_USE_ENV_PROXY=1` in the sandbox; skipped when the env vars are absent) |
+
 ## What is NOT covered
 Real iOS/Android devices and Safari (emulation only; MediaRecorder behaviour differs); resumable-upload recovery after browser
 close; load/performance; screen-reader testing (axe only finds a subset of WCAG issues); penetration testing; Supabase adapters

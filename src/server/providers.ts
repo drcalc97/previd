@@ -4,10 +4,13 @@ import type { IdentityProvider } from "./ports/identity";
 import type { VideoStorage } from "./ports/storage";
 import { localIdentity } from "./adapters/local/identity";
 import { localStorageAdapter } from "./adapters/local/storage";
+import { supabaseIdentity } from "./adapters/supabase/identity";
+
+let cached: IdentityProvider | undefined;
 
 export function identity(): IdentityProvider {
   if (config().AUTH_PROVIDER === "local") return localIdentity;
-  throw new Error("Supabase identity adapter is not implemented yet (planned: next session, once the Supabase project exists).");
+  return (cached ??= supabaseIdentity());
 }
 
 export function storage(): VideoStorage {

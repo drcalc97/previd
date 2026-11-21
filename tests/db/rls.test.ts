@@ -346,3 +346,28 @@ describe("consent and identity minimisation (ADR-017)", () => {
     await admin`delete from mdt_meeting_placeholders where id = ${ph.id}`;
   });
 });
+
+describe("Supabase identity linking (identity_link_supabase)", () => {
+  const link = (subject: string, email: string) => as(null, null, (tx) => tx`select identity_link_supabase(${subject}, ${email}) as id`).then((r) => r[0].id as string | null);
+  const subj = () => "sub-" + Math.random().toString(36).slice(2, 10);
+
+  it("links a confirmed identity to the application user with that email, once, idempotently, and marks the email verified", async () => {
+    await admin`insert into users(id, email, display_name) values (gen_random_uuid(), 'link-me@example.test', 'Link Me') on conflict do nothing`;
+    const s = subj();
+    const id = await link(s, "Link-Me@Example.test"); // case-insensitive
+    expect(id).not.toBeNull();
+    expect(await link(s, "link-me@example.test")).toBe(id); // idempotent for the same subject
+    const [u] = await admin`select email_verified_at from users where id = ${id}`;
+    expect(u.email_verified_at).not.toBeNull();
+  });
+
+  it("refuses to bind a second Supabase identity to an already-linked user (no takeover/re-binding)", async () => {
+    expect(await link(subj(), "link-me@example.test")).toBeNull();
+  });
+
+  it("returns nothing for unknown emails and for disabled users", async () => {
+    expect(await link(subj(), "nobody@example.test")).toBeNull();
+    await admin`insert into users(id, email, display_name, status) values (gen_random_uuid(), 'disabled@example.test', 'D', 'disabled') on conflict do nothing`;
+    expect(await link(subj(), "disabled@example.test")).toBeNull();
+  });
+});

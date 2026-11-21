@@ -14,7 +14,7 @@ const schema = z.object({
   CRON_SECRET: z.string().min(16),
   LOCAL_STORAGE_DIR: z.string().default(".data/videos"),
   SUPABASE_URL: z.string().optional(),
-  SUPABASE_ANON_KEY: z.string().optional(),
+  SUPABASE_PUBLISHABLE_KEY: z.string().optional(),
   SUPABASE_SERVICE_ROLE_KEY: z.string().optional(),
   SUPABASE_VIDEO_BUCKET: z.string().default("videos"),
 });

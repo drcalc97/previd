@@ -371,3 +371,22 @@ describe("Supabase identity linking (identity_link_supabase)", () => {
     expect(await link(subj(), "disabled@example.test")).toBeNull();
   });
 });
+
+describe("recent tombstones (SEC-004 sweep support)", () => {
+  it("returns only recently deleted/failed recordings, and nothing for live ones", async () => {
+    const [p] = await admin`select id from patients where org_id = ${ids["org:northfield"]} limit 1`;
+    const mk = async (key: string, status: string, storageDeletedAgo: string | null) =>
+      (await admin`insert into recordings(org_id, patient_id, recorded_by, identity_verified_at, identity_checks, consent_confirmed_at, consent_confirmed_by, storage_key, idempotency_key, status, storage_deleted_at)
+        values (${ids["org:northfield"]}, ${p.id}, ${ids["clinician@northfield.demo"]}, now(), ${["name", "dob"]}, now(), ${ids["clinician@northfield.demo"]}, ${key}, ${"idem-" + key + "-padpadpad"}, ${status},
+                ${storageDeletedAgo === null ? null : admin`now() - ${storageDeletedAgo}::interval`}) returning id`)[0].id as string;
+    const recent = await mk("k-tomb-recent", "deleted", "10 minutes");
+    const old = await mk("k-tomb-old", "deleted", "5 hours");
+    const live = await mk("k-tomb-live", "available", null);
+    const rows = await as(null, null, (tx) => tx`select id from system_recent_tombstones(100)`);
+    const got = new Set(rows.map((r) => r.id));
+    expect(got.has(recent)).toBe(true);
+    expect(got.has(old)).toBe(false);
+    expect(got.has(live)).toBe(false);
+    await admin`delete from recordings where id in ${admin([recent, old, live])}`;
+  });
+});

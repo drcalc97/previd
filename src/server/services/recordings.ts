@@ -239,6 +239,14 @@ export async function runRetentionSweep(limit = 200): Promise<{ purged: number; 
       errors++;
     }
   }
+  // Re-delete objects of very recently deleted recordings: a still-valid signed upload URL could otherwise re-create them (SEC-004).
+  for (const t of await db()`select * from system_recent_tombstones(${limit})`) {
+    try {
+      await storage().delete(t.storage_key);
+    } catch {
+      errors++;
+    }
+  }
   await db()`select system_cleanup()`;
   return { purged, errors };
 }

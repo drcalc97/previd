@@ -20,7 +20,10 @@
 6. Vercel project: set env vars (below); set function region to `lhr1` (London); add Cron for `/api/cron/retention` with `Authorization: Bearer $CRON_SECRET`.
 7. Verify: security headers, cookies `Secure`, rate-limit IP header behaviour on Vercel, cache headers on `/o/*`.
 
-## Environment variables
+## Environment variables (Supabase + Vercel)
+Set these in Vercel (Production/Preview), **never** in the repo: `AUTH_PROVIDER=supabase`, `STORAGE_PROVIDER=supabase`, `APP_URL`, `DATABASE_URL` (the pooler connection string for the `previd_app` role, transaction mode port 6543, user `previd_app.<project-ref>`; `DATABASE_SSL` defaults to `require` in production), `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY` (public), `SUPABASE_SERVICE_ROLE_KEY` (**secret key, server only**), `SUPABASE_VIDEO_BUCKET=videos`, `SIGNING_SECRET`, `CRON_SECRET`. Leave `PREVID_ALLOW_DEV_ADAPTERS` unset. `previd_app` needs `alter role previd_app login password '…'` first (not yet done). `AUTH_ENC_KEY` is not needed with Supabase auth.
+
+## Environment variables (reference)
 See `.env.example`. Server-only: `DATABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SIGNING_SECRET`, `AUTH_ENC_KEY`, `CRON_SECRET`.
 `PREVID_ALLOW_DEV_ADAPTERS` must be unset/false everywhere except the local e2e test server.
 

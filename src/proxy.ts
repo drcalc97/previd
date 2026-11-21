@@ -6,16 +6,27 @@ import { checkTimers, COOKIE_ACTIVITY, COOKIE_START, readStamp, signStamp } from
  * Per-request CSP nonce. When AUTH_PROVIDER=supabase it also refreshes the Supabase session cookies and enforces the idle /
  * absolute session limits. Authorisation is NOT done here: every page/route re-checks server-side.
  */
+function storageOrigin(): string {
+  // Only when Supabase Storage is in use: browsers upload to / play from signed URLs on the project origin.
+  if (process.env.STORAGE_PROVIDER !== "supabase" || !process.env.SUPABASE_URL) return "";
+  try {
+    return new URL(process.env.SUPABASE_URL).origin;
+  } catch {
+    return "";
+  }
+}
+
 function buildCsp(nonce: string) {
   const dev = process.env.NODE_ENV !== "production";
+  const so = storageOrigin();
   return [
     "default-src 'self'",
     `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${dev ? " 'unsafe-eval'" : ""}`,
     `style-src 'self' ${dev ? "'unsafe-inline'" : `'nonce-${nonce}'`}`,
     "img-src 'self' blob: data:",
-    "media-src 'self' blob:", // recorded preview (blob:) + signed playback URLs (same origin for local storage)
+    `media-src 'self' blob:${so ? ` ${so}` : ""}`, // recorded preview (blob:) + signed playback URLs
     "font-src 'self'",
-    "connect-src 'self'",
+    `connect-src 'self'${so ? ` ${so}` : ""}`, // signed direct uploads go to the storage origin
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'self'",
